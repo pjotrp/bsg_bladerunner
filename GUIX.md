@@ -17,7 +17,49 @@ University of Washington.  Simulating it requires three components:
 ```
 git clone --recursive https://github.com/bespoke-silicon-group/bsg_bladerunner
 cd bsg_bladerunner
+git submodule update --init --recursive
 ```
+
+The `--recursive` flag (or the subsequent `submodule update`) is
+essential -- the repository contains `bsg_manycore`, `bsg_replicant`,
+`basejump_stl`, and their nested submodules (e.g. the RISC-V GNU
+toolchain inside `bsg_manycore/software/riscv-tools/`).  The Guix
+packages use `local-file` to copy from this checkout, so all
+submodules must be populated before building.
+
+## Guix packages used from upstream
+
+The following tools come from Guix rather than being built from source:
+
+- **gcc-toolchain-12** -- host C/C++ compiler (builds verilated model, host driver)
+- **gcc-toolchain-11** -- host compiler for building the RISC-V cross-compiler
+- **perl, python** -- used by verilator and the BSG build system
+- **autoconf, automake, bison, flex** -- GNU build tools for verilator and GCC
+- **linux-libre-headers** -- kernel headers (needed by the cross-compiler configure)
+- **zlib** -- compression library (LTO support in GCC, also linked into simsc)
+- **git** -- the BSG Makefiles call `git rev-parse` to locate repository roots
+- **bc** -- used by BSG machine config Makefiles for arithmetic
+- **coreutils, which** -- standard Unix tools used during the build
+
+## Packages defined in guix.scm
+
+These are built as Guix packages in `guix.scm` because they are not
+in upstream Guix or require BSG-specific versions:
+
+- **verilator-4** -- Verilator 4.228; upstream Guix has v5.x but BSG requires v4.x (API change)
+- **bsg-riscv-toolchain** -- GCC 9.2 + binutils 2.32 + newlib + libgcc cross-compiler for `riscv32-unknown-elf-dramfs` with BSG-specific tuning (`-mtune=bsg_vanilla_2020`)
+- **hammerblade-hello** -- verilates the RTL, cross-compiles the kernel, builds the simulation, and runs it
+
+### Components built from source inside hammerblade-hello (guix.scm)
+
+These are compiled during the `hammerblade-hello` build from the
+BSG source tree (not separate Guix packages):
+
+- **DRAMSim3** -- DRAM simulator library, built from `basejump_stl/imports/DRAMSim3/`
+- **BSG platform libraries** -- `libbsg_manycore_runtime.so`, `libbsg_manycore_regression.so`, `libdramsim3.so`, etc.
+- **Verilated RTL model** -- the 128-core manycore SystemVerilog translated to ~600 C++ files by Verilator, compiled into `Vreplicant_tb_top__ALL.a` (~1.5 GB)
+- **Host driver** -- `loader.c` compiled into `main.so`
+- **RISC-V kernel** -- `main.c` cross-compiled into `main.riscv` using bsg-riscv-toolchain
 
 ## Package 1: verilator-4
 
@@ -259,17 +301,38 @@ make exec.log
         Output captured to exec.log:
           - Machine configuration (128 cores, HBM DRAM, 1.5 GHz)
           - Kernel loading into simulated DRAM
-          - "Hello from core 15, 7" (corner tile prints)
+          - "Hello from core 0, 0 in group origin=(0,0)."
           - DRAM values verification
-          - Finish packet from simulation
+          - "Received finish packet from ( 16,  8)"
 ```
 
 The verilated model compilation is the bottleneck -- compiling ~600
-C++ files sequentially takes 60+ minutes.
+C++ files sequentially takes ~78 minutes.
+
+### Pre-built shared library cleanup
+
+The source tree contains pre-built `.so` files (e.g. `libdramsim3.so`,
+`libbsg_manycore_runtime.so`) that have hardcoded source paths baked
+in at compile time.  For example, `libdramsim3.so` uses a compile-time
+`-DBASEJUMP_STL_DIR="..."` to locate DRAMSim3 config files.  If these
+pre-built libraries are kept, they reference paths from the original
+checkout (e.g. `/fast/pjotr/.../basejump_stl/imports/DRAMSim3/configs/`)
+which don't exist in the build sandbox.
+
+Fix: delete all `.so` files from `bsg_replicant/` before building,
+forcing the make system to rebuild them with correct sandbox paths.
 
 ### Install phase
 
 Copies `exec.log` to `$out/share/hammerblade/hello-exec.log`.
+
+### Verified output
+
+```
+Manycore stderr>> Hello!
+Manycore>> Hello from core 0, 0 in group origin=(0,0).
+BSG INFO: Received finish packet from ( 16,  8)
+```
 
 ## Quick reference
 
