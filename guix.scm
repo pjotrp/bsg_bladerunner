@@ -1,8 +1,8 @@
 ;; BSG Bladerunner HammerBlade packages for Guix
 ;;
-;; Build verilator:    guix build -f guix.scm
-;; Build toolchain:    guix build -f guix.scm -e bsg-riscv-toolchain
-;; Run hello example:  bash guix-run.sh hello
+;; Build verilator:        guix build -f guix.scm
+;; Build toolchain:        (change last line to bsg-riscv-toolchain)
+;; Build hello simulation: (change last line to hammerblade-hello)
 
 (use-modules
   ((guix licenses) #:prefix license:)
@@ -264,4 +264,149 @@
 binutils 2.32, newlib, libgcc) for the HammerBlade manycore architecture.")
     (license license:gpl3+)))
 
-bsg-riscv-toolchain
+;;;
+;;; HammerBlade hello world simulation
+;;;
+
+(define-public hammerblade-hello
+  (package
+    (name "hammerblade-hello")
+    (version "0.1")
+    (source
+     (local-file %dir
+      #:recursive? #t
+      #:select? (lambda (file stat)
+                  (not (or (string-contains file "/.git/")
+                           (string-contains file "/riscv-tools/")
+                           ;; Exclude pre-built simulation models
+                           (and (string-contains file "/machines/")
+                                (string-contains file "/bigblade-verilator/"))
+                           ;; Exclude pre-built spmd artifacts
+                           (and (string-contains file "/spmd/hello/")
+                                (or (string-suffix? ".o" file)
+                                    (string-suffix? ".so" file)
+                                    (string-suffix? ".riscv" file)
+                                    (string-suffix? ".log" file)
+                                    (string-suffix? ".csv" file)
+                                    (string-suffix? ".txt" file)
+                                    (string-suffix? ".json" file)
+                                    (string-suffix? "/loader.c" file)
+                                    (string-suffix? "bsg_link.ld" file)
+                                    (string-suffix? "bsg_manycore_lib.a" file)))
+                           (string-contains file "/debug/")
+                           (string-contains file "/syn/")
+                           (string-contains file "/ci/")
+                           ;; Exclude verilator source (use package)
+                           (string-contains file "/verilator/src/")
+                           (string-contains file "/verilator/test/")
+                           ;; Exclude build artifacts from guix-run.sh
+                           (string-contains file "/verilator-guix")
+                           (string-contains file "/build-hello.log")
+                           (string-contains file "/build-toolchain.log")
+                           (string-contains file "/guix.scm~"))))))
+    (build-system gnu-build-system)
+    (native-inputs
+     (list verilator-4 bsg-riscv-toolchain gcc-toolchain-12
+           bc git-minimal perl python-wrapper which coreutils))
+    (inputs (list zlib))
+    (arguments
+     (list
+      #:tests? #f
+      #:phases
+      #~(modify-phases %standard-phases
+          (delete 'configure)
+          (replace 'build
+            (lambda* (#:key inputs #:allow-other-keys)
+              (let* ((verilator (assoc-ref inputs "verilator"))
+                     (toolchain (assoc-ref inputs "bsg-riscv-toolchain"))
+                     (srcdir (getcwd))
+                     (replicant (string-append srcdir "/bsg_replicant"))
+                     (manycore (string-append srcdir "/bsg_manycore"))
+                     (basejump (string-append srcdir "/basejump_stl"))
+                     (machine-path (string-append replicant
+                       "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
+                     (platform-path (string-append replicant
+                       "/libraries/platforms/bigblade-verilator"))
+                     (vroot (string-append srcdir "/verilator-guix")))
+                ;; Create unified verilator directory
+                (mkdir-p vroot)
+                (symlink (string-append verilator "/bin")
+                         (string-append vroot "/bin"))
+                (symlink (string-append verilator "/share/verilator/include")
+                         (string-append vroot "/include"))
+                ;; Init git repos so git rev-parse works
+                (setenv "GIT_COMMITTER_NAME" "guix")
+                (setenv "GIT_COMMITTER_EMAIL" "guix@guix")
+                (setenv "GIT_AUTHOR_NAME" "guix")
+                (setenv "GIT_AUTHOR_EMAIL" "guix@guix")
+                (for-each
+                 (lambda (d)
+                   (let ((gitpath (string-append d "/.git")))
+                     ;; Remove .git file/dir -- use lstat to avoid
+                     ;; broken gitdir references
+                     (false-if-exception (delete-file gitpath))
+                     (false-if-exception (delete-file-recursively gitpath))
+                     (with-directory-excursion d
+                       (invoke "git" "init")
+                       (invoke "git" "commit" "-m" "init"
+                               "--allow-empty"))))
+                 (list replicant manycore basejump))
+                ;; Set environment
+                (setenv "BLADERUNNER_ROOT" srcdir)
+                (setenv "BSG_MANYCORE_DIR" manycore)
+                (setenv "BASEJUMP_STL_DIR" basejump)
+                (setenv "BSG_F1_DIR" replicant)
+                (setenv "BSG_PLATFORM" "bigblade-verilator")
+                (setenv "VERILATOR_ROOT" vroot)
+                (setenv "VERILATOR" (string-append vroot "/bin/verilator"))
+                (setenv "RISCV" toolchain)
+                (setenv "PATH"
+                  (string-append toolchain "/bin:"
+                                 vroot "/bin:"
+                                 (getenv "PATH")))
+                ;; Patch hardware.mk to allow VERILATOR_ROOT override
+                (substitute* (string-append platform-path "/hardware.mk")
+                  (("^VERILATOR_ROOT = ") "VERILATOR_ROOT ?= ")
+                  (("^VERILATOR = ") "VERILATOR ?= "))
+                ;; Add VL_THREADED define if not present
+                (substitute* (string-append platform-path "/link.mk")
+                  (("DEFINES := -DVL_PRINTF=printf$")
+                   "DEFINES := -DVL_PRINTF=printf -DVL_THREADED"))
+                (setenv "CC" "gcc")
+                (setenv "CXX" "g++")
+                ;; Symlink RISC-V toolchain to expected location
+                (mkdir-p (string-append manycore
+                           "/software/riscv-tools"))
+                (symlink toolchain
+                         (string-append manycore
+                           "/software/riscv-tools/riscv-install"))
+                ;; Clean pre-built kernel artifacts
+                (for-each
+                 (lambda (f) (false-if-exception (delete-file f)))
+                 (find-files (string-append manycore
+                               "/software/spmd/hello")
+                             "\\.(o|riscv|a|ld)$"))
+                ;; Build the hello example (builds simsc + kernel + host)
+                (with-directory-excursion
+                    (string-append replicant "/examples/spmd/hello")
+                  (invoke "make" "CC=gcc" "CXX=g++"
+                          "BSG_PLATFORM=bigblade-verilator"
+                          (string-append "BSG_MACHINE_PATH=" machine-path)
+                          "exec.log")))))
+          (replace 'install
+            (lambda* (#:key outputs #:allow-other-keys)
+              (let* ((out (assoc-ref outputs "out"))
+                     (share (string-append out "/share/hammerblade"))
+                     (hello (string-append (getcwd)
+                              "/bsg_replicant/examples/spmd/hello")))
+                (mkdir-p share)
+                (copy-file (string-append hello "/exec.log")
+                           (string-append share "/hello-exec.log"))))))))
+    (home-page "https://github.com/bespoke-silicon-group/bsg_bladerunner")
+    (synopsis "HammerBlade manycore hello world simulation")
+    (description "Builds and runs the HammerBlade manycore hello world SPMD
+example using Verilator simulation.  The output is a simulation log showing
+the RISC-V cores executing on the simulated manycore.")
+    (license license:bsd-3)))
+
+hammerblade-hello
