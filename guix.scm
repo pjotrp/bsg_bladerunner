@@ -380,6 +380,10 @@ binutils 2.32, newlib, libgcc) for the HammerBlade manycore architecture.")
                 (symlink toolchain
                          (string-append manycore
                            "/software/riscv-tools/riscv-install"))
+                ;; Clean pre-built shared libraries (have hardcoded paths)
+                (for-each
+                 (lambda (f) (false-if-exception (delete-file f)))
+                 (find-files replicant "\\.so(\\..*)?$"))
                 ;; Clean pre-built kernel artifacts
                 (for-each
                  (lambda (f) (false-if-exception (delete-file f)))
