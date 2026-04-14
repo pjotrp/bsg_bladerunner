@@ -6,7 +6,8 @@
 
 (use-modules
   ((guix licenses) #:prefix license:)
-  (guix packages) (guix gexp) (guix git-download) (guix build-system gnu)
+  (guix packages) (guix gexp) (guix git-download)
+  (guix build-system copy) (guix build-system gnu)
   (gnu packages algebra) (gnu packages autotools) (gnu packages base)
   (gnu packages bison) (gnu packages compression) (gnu packages commencement)
   (gnu packages curl) (gnu packages flex) (gnu packages gcc)
@@ -265,6 +266,42 @@ binutils 2.32, newlib, libgcc) for the HammerBlade manycore architecture.")
     (license license:gpl3+)))
 
 ;;;
+;;; BSG Manycore source tree (RTL, software, build system)
+;;;
+
+(define-public bsg-manycore
+  (let ((commit "bfe582b2e9b22cfb55076465ad3bba8f243bd5d4")
+        (revision "0"))
+    (package
+      (name "bsg-manycore")
+      (version (git-version "0.0.0" revision commit))
+      (source (origin
+                (method git-fetch)
+                (uri (git-reference
+                      (url "https://github.com/bespoke-silicon-group/bsg_manycore")
+                      (commit commit)
+                      (recursive? #t)))
+                (file-name (git-file-name name version))
+                (sha256
+                 (base32 "0b798fsc480x8fq0arrsfv53y5ara02nflb8cg620iidgjxz3ci9"))))
+      (build-system copy-build-system)
+      (arguments
+       (list
+        #:install-plan
+        #~'(("v" "share/bsg-manycore/v")
+            ("software" "share/bsg-manycore/software"
+             #:exclude ("riscv-tools"))
+            ("imports" "share/bsg-manycore/imports")
+            ("machines" "share/bsg-manycore/machines")
+            ("testbenches" "share/bsg-manycore/testbenches")
+            ("Makefile" "share/bsg-manycore/Makefile"))))
+      (home-page "https://github.com/bespoke-silicon-group/bsg_manycore")
+      (synopsis "BSG Manycore RTL and software for HammerBlade")
+      (description "SystemVerilog RTL, software libraries, and build
+infrastructure for the BSG Manycore processor used in HammerBlade.")
+      (license license:bsd-3))))
+
+;;;
 ;;; HammerBlade hello world simulation
 ;;;
 
@@ -277,6 +314,7 @@ binutils 2.32, newlib, libgcc) for the HammerBlade manycore architecture.")
       #:recursive? #t
       #:select? (lambda (file stat)
                   (not (or (string-contains file "/.git/")
+                           (string-contains file "/bsg_manycore/")
                            (string-contains file "/riscv-tools/")
                            ;; Exclude pre-built simulation models
                            (and (string-contains file "/machines/")
@@ -306,7 +344,7 @@ binutils 2.32, newlib, libgcc) for the HammerBlade manycore architecture.")
                            (string-contains file "/guix.scm~"))))))
     (build-system gnu-build-system)
     (native-inputs
-     (list verilator-4 bsg-riscv-toolchain gcc-toolchain-12
+     (list verilator-4 bsg-manycore bsg-riscv-toolchain gcc-toolchain-12
            bc git-minimal perl python-wrapper which coreutils))
     (inputs (list zlib))
     (arguments
@@ -319,6 +357,7 @@ binutils 2.32, newlib, libgcc) for the HammerBlade manycore architecture.")
             (lambda* (#:key inputs #:allow-other-keys)
               (let* ((verilator (assoc-ref inputs "verilator"))
                      (toolchain (assoc-ref inputs "bsg-riscv-toolchain"))
+                     (bsg-mc (assoc-ref inputs "bsg-manycore"))
                      (srcdir (getcwd))
                      (replicant (string-append srcdir "/bsg_replicant"))
                      (manycore (string-append srcdir "/bsg_manycore"))
@@ -328,6 +367,10 @@ binutils 2.32, newlib, libgcc) for the HammerBlade manycore architecture.")
                      (platform-path (string-append replicant
                        "/libraries/platforms/bigblade-verilator"))
                      (vroot (string-append srcdir "/verilator-guix")))
+                ;; Copy bsg_manycore from package (needs to be writable)
+                (copy-recursively
+                 (string-append bsg-mc "/share/bsg-manycore")
+                 manycore)
                 ;; Create unified verilator directory
                 (mkdir-p vroot)
                 (symlink (string-append verilator "/bin")
