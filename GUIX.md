@@ -1,31 +1,28 @@
 # BSG Bladerunner HammerBlade -- Guix Build
 
-This file documents the three Guix packages defined in `guix.scm` that
+This file documents the four Guix packages defined in `guix.scm` that
 together build and run a HammerBlade manycore simulation from source.
 
 ## Overview
 
 The HammerBlade is a 128-core RISC-V manycore processor designed at the
-University of Washington.  Simulating it requires three components:
+University of Washington.  Simulating it requires four components:
 
 1. **Verilator 4.228** -- translates the SystemVerilog RTL into C++
-2. **RISC-V cross-compiler** -- GCC 9.2 targeting rv32imaf bare-metal
-3. **Simulation harness** -- verilated model + host driver + RISC-V kernel
+2. **BSG Manycore** -- RTL, software libraries, and build infrastructure
+3. **RISC-V cross-compiler** -- GCC 9.2 targeting rv32imaf bare-metal
+4. **Simulation harness** -- verilated model + host driver + RISC-V kernel
 
 ## Prerequisites
 
 ```
 git clone --recursive https://github.com/bespoke-silicon-group/bsg_bladerunner
 cd bsg_bladerunner
-git submodule update --init --recursive
 ```
 
-The `--recursive` flag (or the subsequent `submodule update`) is
-essential -- the repository contains `bsg_manycore`, `bsg_replicant`,
-`basejump_stl`, and their nested submodules (e.g. the RISC-V GNU
-toolchain inside `bsg_manycore/software/riscv-tools/`).  The Guix
-packages use `local-file` to copy from this checkout, so all
-submodules must be populated before building.
+The `--recursive` flag is needed for `bsg_replicant` and `basejump_stl`
+submodules.  The `bsg_manycore` and `riscv-gnu-toolchain` sources are
+fetched directly from GitHub by Guix (not from the local checkout).
 
 ## Guix packages used from upstream
 
@@ -33,6 +30,7 @@ The following tools come from Guix rather than being built from source:
 
 - **gcc-toolchain-12** -- host C/C++ compiler (builds verilated model, host driver)
 - **gcc-toolchain-11** -- host compiler for building the RISC-V cross-compiler
+- **gmp, mpfr, mpc, isl** -- GCC build prerequisites (used as system libraries)
 - **perl, python** -- used by verilator and the BSG build system
 - **autoconf, automake, bison, flex** -- GNU build tools for verilator and GCC
 - **linux-libre-headers** -- kernel headers (needed by the cross-compiler configure)
@@ -47,10 +45,11 @@ These are built as Guix packages in `guix.scm` because they are not
 in upstream Guix or require BSG-specific versions:
 
 - **verilator-4** -- Verilator 4.228; upstream Guix has v5.x but BSG requires v4.x (API change)
+- **bsg-manycore** -- BSG Manycore source tree (RTL, software, build system) fetched from GitHub
 - **bsg-riscv-toolchain** -- GCC 9.2 + binutils 2.32 + newlib + libgcc cross-compiler for `riscv32-unknown-elf-dramfs` with BSG-specific tuning (`-mtune=bsg_vanilla_2020`)
 - **hammerblade-hello** -- verilates the RTL, cross-compiles the kernel, builds the simulation, and runs it
 
-### Components built from source inside hammerblade-hello (guix.scm)
+### Components built from source inside hammerblade-hello
 
 These are compiled during the `hammerblade-hello` build from the
 BSG source tree (not separate Guix packages):
@@ -68,6 +67,8 @@ BSG Bladerunner requires v4.x (v5.x changed the API).
 
 **Build:** `guix build -f guix.scm`  (when last line is `verilator-4`)
 
+**Source:** https://github.com/verilator/verilator (tag v4.228)
+
 Steps:
 
 1. Fetch verilator v4.228 source from GitHub.
@@ -78,7 +79,33 @@ Steps:
 
 Output: `bin/verilator`, `share/verilator/include/` (runtime headers).
 
-## Package 2: bsg-riscv-toolchain
+## Package 2: bsg-manycore
+
+BSG Manycore source tree containing SystemVerilog RTL, software
+libraries, and build infrastructure for the HammerBlade manycore.
+
+**Build:** change last line of `guix.scm` to `bsg-manycore`, then
+`guix build -f guix.scm`
+
+**Source:** https://github.com/bespoke-silicon-group/bsg_manycore
+(commit bfe582b2, fetched with `recursive? #t` to include the
+HardFloat submodule needed for RTL simulation)
+
+This is a source-only package using `copy-build-system`.  It installs
+the following directories to `share/bsg-manycore/`:
+
+- `v/` -- Manycore RTL (SystemVerilog)
+- `software/` -- SPMD examples, bsg_manycore_lib, mk build system
+  (riscv-tools excluded -- packaged separately as bsg-riscv-toolchain)
+- `imports/` -- HardFloat and other dependencies
+- `machines/` -- machine configurations
+- `testbenches/` -- testbench files
+- `Makefile` -- top-level Makefile
+
+The `riscv-tools/` directory under `software/` is excluded from the
+install plan since the toolchain is packaged separately.
+
+## Package 3: bsg-riscv-toolchain
 
 A bare-metal RISC-V cross-compiler for the HammerBlade manycore tiles.
 The tiles run rv32imaf (32-bit, integer, multiply, atomics, single-float)
@@ -87,15 +114,22 @@ with a custom ABI (`riscv32-unknown-elf-dramfs`).
 **Build:** change last line of `guix.scm` to `bsg-riscv-toolchain`, then
 `guix build -f guix.scm`
 
-### Source filtering
+### Source
 
-The source is the `riscv-gnu-toolchain` submodule inside `bsg_manycore/`.
-It contains GCC 9.2, binutils 2.32, newlib, and support libraries.
-The following are excluded to reduce size (~6 GB savings):
+The top-level source is fetched from GitHub:
+https://github.com/bespoke-silicon-group/riscv-gnu-toolchain
+(commit 6567088)
 
-- `qemu`, `riscv-gdb`, `riscv-glibc`, `riscv-dejagnu` -- not needed
-  for bare-metal
-- `.git/`, `build-*`, `stamps/`, `riscv-install` -- build artifacts
+Three submodules are fetched as separate `origin` definitions and
+copied into the source tree during the `populate-submodules` phase:
+
+- **riscv-binutils** (commit d91cadb4) from https://github.com/riscv/riscv-binutils-gdb
+- **riscv-gcc** (commit 894ea43d) from https://github.com/bespoke-silicon-group/riscv-gcc
+- **riscv-newlib** (commit fa35f8c5) from https://github.com/bespoke-silicon-group/bsg_newlib_dramfs
+
+The remaining submodules (qemu, riscv-gdb, riscv-glibc, riscv-dejagnu)
+are not needed for a bare-metal cross-compiler and are not fetched.
+This avoids downloading several GB of unnecessary source code.
 
 ### Configure phase
 
@@ -108,8 +142,9 @@ This is the most delicate part.  Three problems must be solved:
    a macro that GCC 9.2 does not understand.
 
    Fix: override `C_INCLUDE_PATH` to contain *only*
-   `linux-libre-headers/include` (needed for kernel types) and
-   `zlib/include` (needed for LTO compression).  Unset `CPATH`.
+   `linux-libre-headers/include`, `zlib/include`, and the GCC
+   prerequisite libraries (`gmp`, `mpfr`, `mpc`, `isl`).
+   Set `LIBRARY_PATH` similarly.  Unset `CPATH`.
 
 2. **fixincludes copies host headers.**  GCC's fixincludes mechanism
    scans `/usr/include` (or equivalent) and copies "broken" headers
@@ -199,7 +234,7 @@ store paths like `/gnu/store/.../bash/bin/bash`.  The substitute matched
 Fix: only patch Makefiles in the source tree (skip `build-*` dirs),
 and use anchored patterns (`^SHELL =`) instead of bare `/bin/sh`.
 
-## Package 3: hammerblade-hello
+## Package 4: hammerblade-hello
 
 Builds and runs the HammerBlade "hello world" simulation end-to-end.
 This is the most complex package -- it verilates the full 128-core
@@ -208,38 +243,46 @@ manycore RTL and runs a RISC-V program on it.
 **Build:** change last line of `guix.scm` to `hammerblade-hello`, then
 `guix build -f guix.scm`
 
-### Source filtering
+### Source
 
-The source is the entire `bsg_bladerunner` checkout (~13 GB), filtered
-down to ~500 MB by excluding:
+The source is the `bsg_bladerunner` local checkout (using `local-file`),
+filtered to exclude:
 
 - `.git/` -- git history
-- `riscv-tools/` -- 6.8 GB (packaged separately as bsg-riscv-toolchain)
+- `bsg_manycore/` -- packaged separately as bsg-manycore
+- `riscv-tools/` -- packaged separately as bsg-riscv-toolchain
 - `machines/*/bigblade-verilator/` -- 1.7 GB pre-built simulation models
 - `debug/`, `syn/`, `ci/` -- unused for this build
 - `verilator/src/`, `verilator/test/` -- verilator source (packaged separately)
 - Pre-built SPMD artifacts (`.o`, `.riscv`, `.so`, `.log`)
 
+The package uses `bsg-manycore` and `bsg-riscv-toolchain` as
+native-inputs instead of bundling them from the local checkout.
+
 ### Build phase
 
 The build phase does the following:
 
-**1. Create verilator directory layout**
+**1. Copy bsg_manycore from package**
+
+The bsg-manycore package contents are copied from the Guix store into
+the build tree at `bsg_manycore/`.  A copy (not symlink) is needed
+because the build writes artifacts into this directory.
+
+**2. Create verilator directory layout**
 
 Verilator installs `bin/` and `share/verilator/include/` in separate
 locations.  BSG expects `VERILATOR_ROOT/bin/` and
 `VERILATOR_ROOT/include/` side by side.  We create a unified directory
 with symlinks to both.
 
-**2. Initialize git repositories**
+**3. Initialize git repositories**
 
 The BSG Makefiles call `git rev-parse --show-toplevel` to find the
-repository root.  The submodules have `.git` files (gitdir references)
-that point to the parent `.git/modules/` which was filtered out.
-We delete these broken `.git` files and run `git init` +
-`git commit --allow-empty` in each submodule so `git rev-parse` works.
+repository root.  We run `git init` + `git commit --allow-empty` in
+each component directory so `git rev-parse` works.
 
-**3. Set environment variables**
+**4. Set environment variables**
 
 The BSG build system expects these variables:
 
@@ -250,7 +293,7 @@ The BSG build system expects these variables:
 - `VERILATOR_ROOT`, `VERILATOR` -- verilator binary and headers
 - `RISCV` -- cross-compiler prefix
 
-**4. Patch Makefiles**
+**5. Patch Makefiles**
 
 - `hardware.mk`: change `VERILATOR_ROOT =` to `VERILATOR_ROOT ?=`
   so the environment variable takes effect.
@@ -259,13 +302,13 @@ The BSG build system expects these variables:
   is not defined, causing `VL_LOCK_SPINS` and `VL_CPU_RELAX` to be
   undeclared.
 
-**5. Symlink RISC-V toolchain**
+**6. Symlink RISC-V toolchain**
 
 The kernel Makefile hardcodes the path
 `bsg_manycore/software/riscv-tools/riscv-install/bin/`.
 We create a symlink from this path to the Guix-packaged toolchain.
 
-**6. Run `make exec.log`**
+**7. Run `make exec.log`**
 
 This single make target triggers the entire build chain:
 
@@ -340,6 +383,10 @@ BSG INFO: Received finish packet from ( 16,  8)
 # Build verilator 4.228
 guix build -f guix.scm   # (with last line = verilator-4)
 
+# Build BSG Manycore source package
+# (edit last line to bsg-manycore)
+guix build -f guix.scm
+
 # Build RISC-V cross-compiler
 # (edit last line to bsg-riscv-toolchain)
 guix build -f guix.scm
@@ -353,6 +400,19 @@ bash guix-run.sh toolchain   # build cross-compiler via guix shell
 bash guix-run.sh hello       # run hello example
 ```
 
+## Package dependency graph
+
+```
+hammerblade-hello
+  |-- verilator-4          (Verilator 4.228, from GitHub)
+  |-- bsg-manycore         (RTL + software, from GitHub)
+  |-- bsg-riscv-toolchain  (cross-compiler, from GitHub)
+  |     |-- riscv-binutils-source  (binutils 2.32)
+  |     |-- riscv-gcc-source       (GCC 9.2)
+  |     +-- riscv-newlib-source    (newlib for dramfs)
+  +-- local source         (bsg_replicant, basejump_stl from checkout)
+```
+
 ## Architecture
 
 ```
@@ -361,14 +421,13 @@ bsg_bladerunner/
   |-- guix-run.sh            # Interactive runner (guix shell wrapper)
   |-- project.mk             # Top-level Makefile variables
   |-- basejump_stl/          # BaseJump STL IP library (FIFOs, muxes, etc.)
-  |-- bsg_manycore/
+  |-- bsg_manycore/          # [packaged as bsg-manycore from GitHub]
   |     |-- v/               # Manycore RTL (SystemVerilog)
   |     |-- software/
   |     |     |-- spmd/hello/ # Hello world kernel (main.c)
   |     |     |-- bsg_manycore_lib/ # BSG runtime library
-  |     |     |-- mk/        # Build system for RISC-V kernels
-  |     |     +-- riscv-tools/ # Cross-compiler source (6.8 GB)
-  |     +-- imports/          # DRAMSim3, other dependencies
+  |     |     +-- mk/        # Build system for RISC-V kernels
+  |     +-- imports/          # HardFloat, other dependencies
   +-- bsg_replicant/
         |-- libraries/
         |     +-- platforms/bigblade-verilator/  # Verilator platform
