@@ -13,6 +13,18 @@ University of Washington.  Simulating it requires four components:
 3. **RISC-V cross-compiler** -- GCC 9.2 targeting rv32imaf bare-metal
 4. **Simulation harness** -- verilated model + host driver + RISC-V kernel
 
+## Build times
+
+Approximate build times (single machine):
+
+- **hammerblade-hello** -- ~78 min (compiling ~600 verilated C++ files)
+- **bsg-riscv-toolchain** -- ~10 min (GCC stage1 + newlib + stage2)
+- **verilator-4** -- ~2 min
+- **bsg-manycore** -- <1 min (source copy only)
+
+The verilated model compilation in hammerblade-hello dominates the
+total build time.
+
 ## Prerequisites
 
 No local checkout is needed.  All sources are fetched directly from
