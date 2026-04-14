@@ -15,14 +15,8 @@ University of Washington.  Simulating it requires four components:
 
 ## Prerequisites
 
-```
-git clone --recursive https://github.com/bespoke-silicon-group/bsg_bladerunner
-cd bsg_bladerunner
-```
-
-The `--recursive` flag is needed for `bsg_replicant` and `basejump_stl`
-submodules.  The `bsg_manycore` and `riscv-gnu-toolchain` sources are
-fetched directly from GitHub by Guix (not from the local checkout).
+No local checkout is needed.  All sources are fetched directly from
+GitHub by Guix using `git-fetch`.
 
 ## Guix packages used from upstream
 
@@ -245,19 +239,21 @@ manycore RTL and runs a RISC-V program on it.
 
 ### Source
 
-The source is the `bsg_bladerunner` local checkout (using `local-file`),
-filtered to exclude:
+The top-level source is fetched from GitHub:
+https://github.com/bespoke-silicon-group/bsg_bladerunner
+(commit 8100e97, tag v8.3.2)
 
-- `.git/` -- git history
-- `bsg_manycore/` -- packaged separately as bsg-manycore
-- `riscv-tools/` -- packaged separately as bsg-riscv-toolchain
-- `machines/*/bigblade-verilator/` -- 1.7 GB pre-built simulation models
-- `debug/`, `syn/`, `ci/` -- unused for this build
-- `verilator/src/`, `verilator/test/` -- verilator source (packaged separately)
-- Pre-built SPMD artifacts (`.o`, `.riscv`, `.so`, `.log`)
+A snippet removes submodule stubs that are packaged separately
+(`bsg_manycore`, `aws-fpga`, `verilator`).
 
-The package uses `bsg-manycore` and `bsg-riscv-toolchain` as
-native-inputs instead of bundling them from the local checkout.
+Two submodules are fetched as separate `origin` definitions and
+copied into the source tree during the `populate-submodules` phase:
+
+- **bsg_replicant** (commit 83e2441b) from https://github.com/bespoke-silicon-group/bsg_replicant
+- **basejump_stl** (commit 5c66f9de, recursive for DRAMSim3) from https://github.com/bespoke-silicon-group/basejump_stl
+
+The package also uses `bsg-manycore` and `bsg-riscv-toolchain` as
+native-inputs.
 
 ### Build phase
 
@@ -297,10 +293,10 @@ The BSG build system expects these variables:
 
 - `hardware.mk`: change `VERILATOR_ROOT =` to `VERILATOR_ROOT ?=`
   so the environment variable takes effect.
-- `link.mk`: add `-DVL_THREADED` to the verilator compile defines.
-  Without this, `verilated_threads.h` is included but `VL_THREADED`
-  is not defined, causing `VL_LOCK_SPINS` and `VL_CPU_RELAX` to be
-  undeclared.
+- `link.mk`: add `-DVL_THREADED` to the verilator compile defines
+  and to the simulator object CXXFLAGS.  Without this,
+  `verilated_threads.h` is included but `VL_THREADED` is not defined,
+  causing `VL_LOCK_SPINS` and `VL_CPU_RELAX` to be undeclared.
 
 **6. Symlink RISC-V toolchain**
 
@@ -403,14 +399,15 @@ bash guix-run.sh hello       # run hello example
 ## Package dependency graph
 
 ```
-hammerblade-hello
+hammerblade-hello          (from GitHub, commit 8100e97)
   |-- verilator-4          (Verilator 4.228, from GitHub)
-  |-- bsg-manycore         (RTL + software, from GitHub)
+  |-- bsg-manycore         (RTL + software, from GitHub, recursive)
   |-- bsg-riscv-toolchain  (cross-compiler, from GitHub)
   |     |-- riscv-binutils-source  (binutils 2.32)
   |     |-- riscv-gcc-source       (GCC 9.2)
   |     +-- riscv-newlib-source    (newlib for dramfs)
-  +-- local source         (bsg_replicant, basejump_stl from checkout)
+  |-- bsg-replicant-source (simulation harness, from GitHub)
+  +-- basejump-stl-source  (IP library + DRAMSim3, from GitHub, recursive)
 ```
 
 ## Architecture
@@ -421,7 +418,7 @@ bsg_bladerunner/
   |-- guix-run.sh            # Interactive runner (guix shell wrapper)
   |-- project.mk             # Top-level Makefile variables
   |-- basejump_stl/          # BaseJump STL IP library (FIFOs, muxes, etc.)
-  |-- bsg_manycore/          # [packaged as bsg-manycore from GitHub]
+  |-- bsg_manycore/          # [separate package: bsg-manycore]
   |     |-- v/               # Manycore RTL (SystemVerilog)
   |     |-- software/
   |     |     |-- spmd/hello/ # Hello world kernel (main.c)

@@ -331,8 +331,7 @@ binutils 2.32, newlib, libgcc) for the HammerBlade manycore architecture.")
        (list
         #:install-plan
         #~'(("v" "share/bsg-manycore/v")
-            ("software" "share/bsg-manycore/software"
-             #:exclude ("riscv-tools"))
+            ("software" "share/bsg-manycore/software")
             ("imports" "share/bsg-manycore/imports")
             ("machines" "share/bsg-manycore/machines")
             ("testbenches" "share/bsg-manycore/testbenches")
@@ -347,43 +346,46 @@ infrastructure for the BSG Manycore processor used in HammerBlade.")
 ;;; HammerBlade hello world simulation
 ;;;
 
+(define bsg-replicant-source
+  (origin
+    (method git-fetch)
+    (uri (git-reference
+          (url "https://github.com/bespoke-silicon-group/bsg_replicant")
+          (commit "83e2441b3bab646a69159fa9dee80de2af9b24ae")))
+    (file-name "bsg-replicant-checkout")
+    (sha256 (base32 "1kbalc5yav6jxrwwk1pbf8dr3hrhnml49jkxg2zh11zwab0s1gzf"))))
+
+(define basejump-stl-source
+  (let ((commit "5c66f9dea8c866393dc9de948563c61d81651571"))
+    (origin
+      (method git-fetch)
+      (uri (git-reference
+            (url "https://github.com/bespoke-silicon-group/basejump_stl")
+            (commit commit)
+            (recursive? #t)))
+      (file-name "basejump-stl-checkout")
+      (sha256 (base32 "187zwc4z5rbpfddssn84xp7bv2akwz8nz4vkzka7vils16gpq219")))))
+
 (define-public hammerblade-hello
+  (let ((commit "8100e9726654a00f11b40b9cf4a2c9a510f77dbb")
+        (revision "0"))
   (package
     (name "hammerblade-hello")
-    (version "0.1")
-    (source
-     (local-file %dir
-      #:recursive? #t
-      #:select? (lambda (file stat)
-                  (not (or (string-contains file "/.git/")
-                           (string-contains file "/bsg_manycore/")
-                           (string-contains file "/riscv-tools/")
-                           ;; Exclude pre-built simulation models
-                           (and (string-contains file "/machines/")
-                                (string-contains file "/bigblade-verilator/"))
-                           ;; Exclude pre-built spmd artifacts
-                           (and (string-contains file "/spmd/hello/")
-                                (or (string-suffix? ".o" file)
-                                    (string-suffix? ".so" file)
-                                    (string-suffix? ".riscv" file)
-                                    (string-suffix? ".log" file)
-                                    (string-suffix? ".csv" file)
-                                    (string-suffix? ".txt" file)
-                                    (string-suffix? ".json" file)
-                                    (string-suffix? "/loader.c" file)
-                                    (string-suffix? "bsg_link.ld" file)
-                                    (string-suffix? "bsg_manycore_lib.a" file)))
-                           (string-contains file "/debug/")
-                           (string-contains file "/syn/")
-                           (string-contains file "/ci/")
-                           ;; Exclude verilator source (use package)
-                           (string-contains file "/verilator/src/")
-                           (string-contains file "/verilator/test/")
-                           ;; Exclude build artifacts from guix-run.sh
-                           (string-contains file "/verilator-guix")
-                           (string-contains file "/build-hello.log")
-                           (string-contains file "/build-toolchain.log")
-                           (string-contains file "/guix.scm~"))))))
+    (version (git-version "0.0.0" revision commit))
+    (source (origin
+              (method git-fetch)
+              (uri (git-reference
+                    (url "https://github.com/bespoke-silicon-group/bsg_bladerunner")
+                    (commit commit)))
+              (file-name (git-file-name name version))
+              (sha256
+               (base32 "1hmrmcngmm049jpsy8n9wl9z5yy4dbn68z7dfilr93v0az2v1yhd"))
+              (modules '((guix build utils)))
+              (snippet
+               ;; Remove submodule stubs and unneeded directories
+               '(for-each delete-file-recursively
+                          (filter file-exists?
+                                  '("bsg_manycore" "aws-fpga" "verilator"))))))
     (build-system gnu-build-system)
     (native-inputs
      (list verilator-4 bsg-manycore bsg-riscv-toolchain gcc-toolchain-12
@@ -395,6 +397,17 @@ infrastructure for the BSG Manycore processor used in HammerBlade.")
       #:phases
       #~(modify-phases %standard-phases
           (delete 'configure)
+          (add-after 'unpack 'populate-submodules
+            (lambda _
+              (for-each
+               (lambda (pair)
+                 (copy-recursively (car pair) (cdr pair))
+                 (for-each
+                  (lambda (f)
+                    (false-if-exception (make-file-writable f)))
+                  (find-files (cdr pair) "." #:directories? #t)))
+               (list (cons #$bsg-replicant-source "bsg_replicant")
+                     (cons #$basejump-stl-source "basejump_stl")))))
           (replace 'build
             (lambda* (#:key inputs #:allow-other-keys)
               (let* ((verilator (assoc-ref inputs "verilator"))
@@ -453,10 +466,13 @@ infrastructure for the BSG Manycore processor used in HammerBlade.")
                 (substitute* (string-append platform-path "/hardware.mk")
                   (("^VERILATOR_ROOT = ") "VERILATOR_ROOT ?= ")
                   (("^VERILATOR = ") "VERILATOR ?= "))
-                ;; Add VL_THREADED define if not present
+                ;; Add VL_THREADED define for verilator objects and
+                ;; simulator object (both need it for verilated_threads.h)
                 (substitute* (string-append platform-path "/link.mk")
-                  (("DEFINES := -DVL_PRINTF=printf$")
-                   "DEFINES := -DVL_PRINTF=printf -DVL_THREADED"))
+                  (("DEFINES := -DVL_PRINTF=printf")
+                   "DEFINES := -DVL_PRINTF=printf -DVL_THREADED")
+                  (("\\$\\(SIMOS\\): CXXFLAGS := ")
+                   "$(SIMOS): CXXFLAGS := -DVL_THREADED "))
                 (setenv "CC" "gcc")
                 (setenv "CXX" "g++")
                 ;; Symlink RISC-V toolchain to expected location
@@ -496,6 +512,6 @@ infrastructure for the BSG Manycore processor used in HammerBlade.")
     (description "Builds and runs the HammerBlade manycore hello world SPMD
 example using Verilator simulation.  The output is a simulation log showing
 the RISC-V cores executing on the simulated manycore.")
-    (license license:bsd-3)))
+    (license license:bsd-3))))
 
 hammerblade-hello
