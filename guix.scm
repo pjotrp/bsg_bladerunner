@@ -55,31 +55,52 @@
 ;;; BSG RISC-V rv32imaf cross-compiler with newlib + libgcc
 ;;;
 
+(define riscv-binutils-source
+  (origin
+    (method git-fetch)
+    (uri (git-reference
+          (url "https://github.com/riscv/riscv-binutils-gdb")
+          (commit "d91cadb45f3ef9f96c6ebe8ffb20472824ed05a7")))
+    (file-name "riscv-binutils-checkout")
+    (sha256 (base32 "00i1inzq81zmrmxzxbgz6y999ql7yf6w417ldrf445fn9b7i15vy"))))
+
+(define riscv-gcc-source
+  (origin
+    (method git-fetch)
+    (uri (git-reference
+          (url "https://github.com/bespoke-silicon-group/riscv-gcc")
+          (commit "894ea43d262f38c40592bbab93162225adb734d0")))
+    (file-name "riscv-gcc-checkout")
+    (sha256 (base32 "03wry4j9l0y846lkfk9hr9wlifxpiig6in1iswax7r0li3qs3gqi"))))
+
+(define riscv-newlib-source
+  (origin
+    (method git-fetch)
+    (uri (git-reference
+          (url "https://github.com/bespoke-silicon-group/bsg_newlib_dramfs")
+          (commit "fa35f8c5afc96e5ba5e213b81111be770affdbb3")))
+    (file-name "riscv-newlib-checkout")
+    (sha256 (base32 "116cifjdpmrl0z8rnxhzwq5rmyfk9cazaixl7jw15l8pn3hhbkj6"))))
+
 (define-public bsg-riscv-toolchain
+  (let ((commit "656708846d723936eb5ba2648f6f919608a8ccaf")
+        (revision "0"))
   (package
     (name "bsg-riscv-toolchain")
-    (version "0.1")
-    (source
-     (local-file
-      (string-append %dir
-        "/bsg_manycore/software/riscv-tools/riscv-gnu-toolchain")
-      #:recursive? #t
-      #:select? (lambda (file stat)
-                  (not (or (string-contains file "/qemu")
-                           (string-contains file "/riscv-gdb")
-                           (string-contains file "/riscv-glibc")
-                           (string-contains file "/riscv-dejagnu")
-                           (string-contains file "/.git/")
-                           (string-contains file "/build-")
-                           (string-contains file "/stamps/")
-                           (string-contains file "/riscv-install")
-                           (string-contains file "/install-newlib")
-                           (string-contains file "/limits-fix"))))))
+    (version (git-version "0.0.0" revision commit))
+    (source (origin
+              (method git-fetch)
+              (uri (git-reference
+                    (url "https://github.com/bespoke-silicon-group/riscv-gnu-toolchain")
+                    (commit commit)))
+              (file-name (git-file-name name version))
+              (sha256
+               (base32 "0x9b8vyxrcw07cyavfirv1556g7nmv5dp2wh6rvsx7rn0958kx5r"))))
     (build-system gnu-build-system)
     (native-inputs
      (list autoconf automake bc bison curl flex gcc-toolchain-11
-           gettext-minimal git-minimal `(,gfortran "lib") gmp libtool
-           linux-libre-headers perl python texinfo wget which zlib))
+           gettext-minimal git-minimal `(,gfortran "lib") gmp isl libtool
+           linux-libre-headers mpc mpfr perl python texinfo wget which zlib))
     (arguments
      (list
       #:tests? #f
@@ -90,6 +111,16 @@
                   (ice-9 rdelim))
       #:phases
       #~(modify-phases %standard-phases
+          (add-after 'unpack 'populate-submodules
+            (lambda _
+              (for-each
+               (lambda (pair)
+                 (copy-recursively (car pair) (cdr pair))
+                 (for-each make-file-writable
+                           (find-files (cdr pair) "." #:directories? #t)))
+               (list (cons #$riscv-binutils-source "riscv-binutils")
+                     (cons #$riscv-gcc-source "riscv-gcc")
+                     (cons #$riscv-newlib-source "riscv-newlib")))))
           (replace 'configure
             (lambda* (#:key outputs inputs #:allow-other-keys)
               (let ((bash (which "bash"))
@@ -98,15 +129,26 @@
                 (setenv "CONFIG_SHELL" bash)
                 (setenv "SHELL" bash)
                 ;; KEY FIX: set C_INCLUDE_PATH to ONLY linux-libre-headers
-                ;; + zlib (needed for lto-compress). This prevents glibc
-                ;; headers from leaking into the cross-compiler.
-                (let ((zlib (assoc-ref inputs "zlib")))
+                ;; + zlib + gmp/mpfr/mpc/isl (GCC prereqs). This prevents
+                ;; glibc headers from leaking into the cross-compiler.
+                (let ((zlib (assoc-ref inputs "zlib"))
+                      (gmp  (assoc-ref inputs "gmp"))
+                      (mpfr (assoc-ref inputs "mpfr"))
+                      (mpc  (assoc-ref inputs "mpc"))
+                      (isl  (assoc-ref inputs "isl")))
                   (setenv "C_INCLUDE_PATH"
-                          (string-append linux "/include:"
-                                         zlib "/include"))
+                          (string-join
+                           (map (lambda (p) (string-append p "/include"))
+                                (list linux zlib gmp mpfr mpc isl))
+                           ":"))
                   (setenv "CPLUS_INCLUDE_PATH"
                           (getenv "C_INCLUDE_PATH"))
-                  (unsetenv "CPATH"))
+                  (unsetenv "CPATH")
+                  (setenv "LIBRARY_PATH"
+                          (string-join
+                           (map (lambda (p) (string-append p "/lib"))
+                                (list zlib gmp mpfr mpc isl))
+                           ":")))
                 ;; Fix shebangs in source Makefiles only
                 ;; (skip build-* dirs which have correct store paths)
                 (for-each
@@ -263,7 +305,7 @@
     (synopsis "BSG RISC-V rv32imaf cross-compiler for HammerBlade")
     (description "RISC-V rv32imaf bare-metal cross-compiler (GCC 9.2,
 binutils 2.32, newlib, libgcc) for the HammerBlade manycore architecture.")
-    (license license:gpl3+)))
+    (license license:gpl3+))))
 
 ;;;
 ;;; BSG Manycore source tree (RTL, software, build system)
