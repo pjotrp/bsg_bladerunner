@@ -10,12 +10,68 @@
   (guix build-system copy) (guix build-system gnu)
   (gnu packages algebra) (gnu packages autotools) (gnu packages base)
   (gnu packages bison) (gnu packages compression) (gnu packages commencement)
+  (gnu packages cross-base)
   (gnu packages curl) (gnu packages flex) (gnu packages gcc)
   (gnu packages gettext) (gnu packages linux) (gnu packages multiprecision)
   (gnu packages perl) (gnu packages python) (gnu packages texinfo)
   (gnu packages version-control) (gnu packages wget))
 
 (define %dir (dirname (current-filename)))
+
+;; Guix cross-compilation tools for riscv32-elf
+(define %riscv32-xbinutils (cross-binutils "riscv32-elf"))
+(define %riscv32-xgcc (cross-gcc "riscv32-elf"))
+
+;;;
+;;; Newlib for riscv32-elf (bare-metal C library)
+;;;
+
+(define-public riscv32-elf-newlib
+  (package
+    (name "riscv32-elf-newlib")
+    (version "4.1.0")
+    (source (origin
+              (method git-fetch)
+              (uri (git-reference
+                    (url "https://github.com/bespoke-silicon-group/bsg_newlib_dramfs")
+                    (commit "fa35f8c5afc96e5ba5e213b81111be770affdbb3")))
+              (file-name (git-file-name name version))
+              (sha256
+               (base32 "116cifjdpmrl0z8rnxhzwq5rmyfk9cazaixl7jw15l8pn3hhbkj6"))))
+    (build-system gnu-build-system)
+    (native-inputs (list %riscv32-xgcc %riscv32-xbinutils))
+    (arguments
+     (list
+      #:tests? #f
+      #:configure-flags
+      #~(list "--target=riscv32-elf"
+              (string-append "--prefix=" #$output)
+              "--disable-newlib-supplied-syscalls"
+              "--enable-newlib-reent-small"
+              "--disable-newlib-io-float"
+              "--enable-lite-exit")
+      #:phases
+      #~(modify-phases %standard-phases
+          (add-after 'unpack 'set-cross-env
+            (lambda _
+              (let ((bash (which "bash")))
+                (setenv "CONFIG_SHELL" bash)
+                (setenv "SHELL" bash)
+                (setenv "CC_FOR_TARGET" "riscv32-elf-gcc")
+                (setenv "AR_FOR_TARGET" "riscv32-elf-ar")
+                (setenv "AS_FOR_TARGET" "riscv32-elf-as")
+                (setenv "RANLIB_FOR_TARGET" "riscv32-elf-ranlib")
+                ;; Old newlib + GCC 14 compatibility
+                (setenv "CFLAGS_FOR_TARGET"
+                  (string-append
+                   "-Wno-error=implicit-function-declaration "
+                   "-Wno-error=implicit-int "
+                   "-Wno-error=int-conversion"))))))))
+    (home-page "https://sourceware.org/newlib/")
+    (synopsis "C library for riscv32-elf bare-metal targets")
+    (description "Newlib C library cross-compiled for riscv32-elf with
+small reentrant struct, suitable for embedded/manycore targets.")
+    (license license:bsd-3)))
 
 ;;;
 ;;; Verilator 4.228
