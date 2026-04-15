@@ -343,7 +343,7 @@ infrastructure for the BSG Manycore processor used in HammerBlade.")
       (license license:bsd-3))))
 
 ;;;
-;;; HammerBlade hello world simulation
+;;; HammerBlade simulation platform (verilated model + shared libraries)
 ;;;
 
 (define bsg-replicant-source
@@ -366,6 +366,172 @@ infrastructure for the BSG Manycore processor used in HammerBlade.")
       (file-name "basejump-stl-checkout")
       (sha256 (base32 "187zwc4z5rbpfddssn84xp7bv2akwz8nz4vkzka7vils16gpq219")))))
 
+;; Shared helper: set up the BSG build tree from packages.
+;; Returns an alist of (name . path) for use by callers.
+(define %hammerblade-setup-phase
+  #~(lambda* (#:key inputs #:allow-other-keys)
+      (let* ((verilator (assoc-ref inputs "verilator"))
+             (bsg-mc (assoc-ref inputs "bsg-manycore"))
+             (srcdir (getcwd))
+             (replicant (string-append srcdir "/bsg_replicant"))
+             (manycore (string-append srcdir "/bsg_manycore"))
+             (basejump (string-append srcdir "/basejump_stl"))
+             (machine-path (string-append replicant
+               "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
+             (platform-path (string-append replicant
+               "/libraries/platforms/bigblade-verilator"))
+             (vroot (string-append srcdir "/verilator-guix")))
+        ;; Copy bsg_manycore from package (needs to be writable)
+        (copy-recursively
+         (string-append bsg-mc "/share/bsg-manycore")
+         manycore)
+        ;; Create unified verilator directory
+        (mkdir-p vroot)
+        (symlink (string-append verilator "/bin")
+                 (string-append vroot "/bin"))
+        (symlink (string-append verilator "/share/verilator/include")
+                 (string-append vroot "/include"))
+        ;; Init git repos so git rev-parse works
+        (setenv "GIT_COMMITTER_NAME" "guix")
+        (setenv "GIT_COMMITTER_EMAIL" "guix@guix")
+        (setenv "GIT_AUTHOR_NAME" "guix")
+        (setenv "GIT_AUTHOR_EMAIL" "guix@guix")
+        (for-each
+         (lambda (d)
+           (let ((gitpath (string-append d "/.git")))
+             (false-if-exception (delete-file gitpath))
+             (false-if-exception (delete-file-recursively gitpath))
+             (with-directory-excursion d
+               (invoke "git" "init")
+               (invoke "git" "commit" "-m" "init"
+                       "--allow-empty"))))
+         (list replicant manycore basejump))
+        ;; Set environment
+        (setenv "BLADERUNNER_ROOT" srcdir)
+        (setenv "BSG_MANYCORE_DIR" manycore)
+        (setenv "BASEJUMP_STL_DIR" basejump)
+        (setenv "BSG_F1_DIR" replicant)
+        (setenv "BSG_PLATFORM" "bigblade-verilator")
+        (setenv "VERILATOR_ROOT" vroot)
+        (setenv "VERILATOR" (string-append vroot "/bin/verilator"))
+        (setenv "CC" "gcc")
+        (setenv "CXX" "g++")
+        ;; Patch hardware.mk to allow VERILATOR_ROOT override
+        (substitute* (string-append platform-path "/hardware.mk")
+          (("^VERILATOR_ROOT = ") "VERILATOR_ROOT ?= ")
+          (("^VERILATOR = ") "VERILATOR ?= "))
+        ;; Add VL_THREADED define for verilator objects and
+        ;; simulator object (both need it for verilated_threads.h)
+        (substitute* (string-append platform-path "/link.mk")
+          (("DEFINES := -DVL_PRINTF=printf")
+           "DEFINES := -DVL_PRINTF=printf -DVL_THREADED")
+          (("\\$\\(SIMOS\\): CXXFLAGS := ")
+           "$(SIMOS): CXXFLAGS := -DVL_THREADED "))
+        ;; Clean pre-built shared libraries (have hardcoded paths)
+        (for-each
+         (lambda (f) (false-if-exception (delete-file f)))
+         (find-files replicant "\\.so(\\..*)?$")))))
+
+(define-public hammerblade-sim
+  (let ((commit "8100e9726654a00f11b40b9cf4a2c9a510f77dbb")
+        (revision "0"))
+  (package
+    (name "hammerblade-sim")
+    (version (git-version "0.0.0" revision commit))
+    (source (origin
+              (method git-fetch)
+              (uri (git-reference
+                    (url "https://github.com/bespoke-silicon-group/bsg_bladerunner")
+                    (commit commit)))
+              (file-name (git-file-name name version))
+              (sha256
+               (base32 "1hmrmcngmm049jpsy8n9wl9z5yy4dbn68z7dfilr93v0az2v1yhd"))
+              (modules '((guix build utils)))
+              (snippet
+               '(for-each delete-file-recursively
+                          (filter file-exists?
+                                  '("bsg_manycore" "aws-fpga" "verilator"))))))
+    (build-system gnu-build-system)
+    (native-inputs
+     (list verilator-4 bsg-manycore gcc-toolchain-12
+           bc git-minimal perl python-wrapper which coreutils))
+    (inputs (list zlib))
+    (arguments
+     (list
+      #:tests? #f
+      #:phases
+      #~(modify-phases %standard-phases
+          (delete 'configure)
+          (add-after 'unpack 'populate-submodules
+            (lambda _
+              (for-each
+               (lambda (pair)
+                 (copy-recursively (car pair) (cdr pair))
+                 (for-each
+                  (lambda (f)
+                    (false-if-exception (make-file-writable f)))
+                  (find-files (cdr pair) "." #:directories? #t)))
+               (list (cons #$bsg-replicant-source "bsg_replicant")
+                     (cons #$basejump-stl-source "basejump_stl")))))
+          (replace 'build
+            (lambda* (#:key inputs #:allow-other-keys)
+              ;; Set up the BSG build tree
+              (#$%hammerblade-setup-phase #:inputs inputs)
+              (let* ((srcdir (getcwd))
+                     (replicant (string-append srcdir "/bsg_replicant"))
+                     (machine-path (string-append replicant
+                       "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel")))
+                ;; Build only simsc + platform libraries (the slow part)
+                (with-directory-excursion
+                    (string-append replicant "/examples/spmd/hello")
+                  (invoke "make" "CC=gcc" "CXX=g++"
+                          "BSG_PLATFORM=bigblade-verilator"
+                          (string-append "BSG_MACHINE_PATH=" machine-path)
+                          (string-append machine-path
+                            "/bigblade-verilator/exec/simsc"))))))
+          (replace 'install
+            (lambda* (#:key outputs #:allow-other-keys)
+              (let* ((out (assoc-ref outputs "out"))
+                     (srcdir (getcwd))
+                     (replicant (string-append srcdir "/bsg_replicant"))
+                     (machine-path (string-append replicant
+                       "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
+                     (dest (string-append out "/share/hammerblade-sim")))
+                ;; Install the full verilated exec directory (simsc +
+                ;; generated .mk/.cpp/.o/.a so make sees them as up-to-date)
+                (copy-recursively
+                 (string-append machine-path "/bigblade-verilator/exec")
+                 (string-append dest "/exec"))
+                ;; Install platform shared libraries in their tree layout
+                (for-each
+                 (lambda (f)
+                   (let ((rel (string-drop f (string-length replicant))))
+                     (mkdir-p (dirname (string-append dest rel)))
+                     (copy-file f (string-append dest rel))))
+                 (find-files (string-append replicant "/libraries")
+                             "\\.so$"))
+                ;; Install machine config files
+                (copy-recursively machine-path
+                  (string-append dest "/machine")
+                  #:select? (lambda (f s)
+                    (or (eq? 'directory (stat:type s))
+                        (string-suffix? ".rom" f)
+                        (string-suffix? ".sv" f)
+                        (string-suffix? ".json" f)
+                        (string-suffix? ".cfg" f)
+                        (string-suffix? ".tr" f))))))))))
+    (home-page "https://github.com/bespoke-silicon-group/bsg_bladerunner")
+    (synopsis "HammerBlade verilated simulation platform")
+    (description "Verilated simulation binary (simsc) and platform shared
+libraries for the HammerBlade manycore.  This is the slow build (~78 min)
+that compiles ~600 C++ files from the verilated RTL model.  Example
+packages like hammerblade-hello use this as an input.")
+    (license license:bsd-3))))
+
+;;;
+;;; HammerBlade hello world example
+;;;
+
 (define-public hammerblade-hello
   (let ((commit "8100e9726654a00f11b40b9cf4a2c9a510f77dbb")
         (revision "0"))
@@ -382,7 +548,6 @@ infrastructure for the BSG Manycore processor used in HammerBlade.")
                (base32 "1hmrmcngmm049jpsy8n9wl9z5yy4dbn68z7dfilr93v0az2v1yhd"))
               (modules '((guix build utils)))
               (snippet
-               ;; Remove submodule stubs and unneeded directories
                '(for-each delete-file-recursively
                           (filter file-exists?
                                   '("bsg_manycore" "aws-fpga" "verilator"))))))
@@ -410,86 +575,28 @@ infrastructure for the BSG Manycore processor used in HammerBlade.")
                      (cons #$basejump-stl-source "basejump_stl")))))
           (replace 'build
             (lambda* (#:key inputs #:allow-other-keys)
-              (let* ((verilator (assoc-ref inputs "verilator"))
-                     (toolchain (assoc-ref inputs "bsg-riscv-toolchain"))
-                     (bsg-mc (assoc-ref inputs "bsg-manycore"))
+              ;; Set up the BSG build tree
+              (#$%hammerblade-setup-phase #:inputs inputs)
+              (let* ((toolchain (assoc-ref inputs "bsg-riscv-toolchain"))
                      (srcdir (getcwd))
                      (replicant (string-append srcdir "/bsg_replicant"))
                      (manycore (string-append srcdir "/bsg_manycore"))
-                     (basejump (string-append srcdir "/basejump_stl"))
                      (machine-path (string-append replicant
-                       "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
-                     (platform-path (string-append replicant
-                       "/libraries/platforms/bigblade-verilator"))
-                     (vroot (string-append srcdir "/verilator-guix")))
-                ;; Copy bsg_manycore from package (needs to be writable)
-                (copy-recursively
-                 (string-append bsg-mc "/share/bsg-manycore")
-                 manycore)
-                ;; Create unified verilator directory
-                (mkdir-p vroot)
-                (symlink (string-append verilator "/bin")
-                         (string-append vroot "/bin"))
-                (symlink (string-append verilator "/share/verilator/include")
-                         (string-append vroot "/include"))
-                ;; Init git repos so git rev-parse works
-                (setenv "GIT_COMMITTER_NAME" "guix")
-                (setenv "GIT_COMMITTER_EMAIL" "guix@guix")
-                (setenv "GIT_AUTHOR_NAME" "guix")
-                (setenv "GIT_AUTHOR_EMAIL" "guix@guix")
-                (for-each
-                 (lambda (d)
-                   (let ((gitpath (string-append d "/.git")))
-                     ;; Remove .git file/dir -- use lstat to avoid
-                     ;; broken gitdir references
-                     (false-if-exception (delete-file gitpath))
-                     (false-if-exception (delete-file-recursively gitpath))
-                     (with-directory-excursion d
-                       (invoke "git" "init")
-                       (invoke "git" "commit" "-m" "init"
-                               "--allow-empty"))))
-                 (list replicant manycore basejump))
-                ;; Set environment
-                (setenv "BLADERUNNER_ROOT" srcdir)
-                (setenv "BSG_MANYCORE_DIR" manycore)
-                (setenv "BASEJUMP_STL_DIR" basejump)
-                (setenv "BSG_F1_DIR" replicant)
-                (setenv "BSG_PLATFORM" "bigblade-verilator")
-                (setenv "VERILATOR_ROOT" vroot)
-                (setenv "VERILATOR" (string-append vroot "/bin/verilator"))
+                       "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel")))
                 (setenv "RISCV" toolchain)
                 (setenv "PATH"
                   (string-append toolchain "/bin:"
-                                 vroot "/bin:"
+                                 srcdir "/verilator-guix/bin:"
                                  (getenv "PATH")))
-                ;; Patch hardware.mk to allow VERILATOR_ROOT override
-                (substitute* (string-append platform-path "/hardware.mk")
-                  (("^VERILATOR_ROOT = ") "VERILATOR_ROOT ?= ")
-                  (("^VERILATOR = ") "VERILATOR ?= "))
-                ;; Add VL_THREADED define for verilator objects and
-                ;; simulator object (both need it for verilated_threads.h)
-                (substitute* (string-append platform-path "/link.mk")
-                  (("DEFINES := -DVL_PRINTF=printf")
-                   "DEFINES := -DVL_PRINTF=printf -DVL_THREADED")
-                  (("\\$\\(SIMOS\\): CXXFLAGS := ")
-                   "$(SIMOS): CXXFLAGS := -DVL_THREADED "))
-                (setenv "CC" "gcc")
-                (setenv "CXX" "g++")
                 ;; Symlink RISC-V toolchain to expected location
-                (mkdir-p (string-append manycore
-                           "/software/riscv-tools"))
+                (mkdir-p (string-append manycore "/software/riscv-tools"))
                 (symlink toolchain
                          (string-append manycore
                            "/software/riscv-tools/riscv-install"))
-                ;; Clean pre-built shared libraries (have hardcoded paths)
-                (for-each
-                 (lambda (f) (false-if-exception (delete-file f)))
-                 (find-files replicant "\\.so(\\..*)?$"))
                 ;; Clean pre-built kernel artifacts
                 (for-each
                  (lambda (f) (false-if-exception (delete-file f)))
-                 (find-files (string-append manycore
-                               "/software/spmd/hello")
+                 (find-files (string-append manycore "/software/spmd/hello")
                              "\\.(o|riscv|a|ld)$"))
                 ;; Build the hello example (builds simsc + kernel + host)
                 (with-directory-excursion
@@ -510,8 +617,7 @@ infrastructure for the BSG Manycore processor used in HammerBlade.")
     (home-page "https://github.com/bespoke-silicon-group/bsg_bladerunner")
     (synopsis "HammerBlade manycore hello world simulation")
     (description "Builds and runs the HammerBlade manycore hello world SPMD
-example using Verilator simulation.  The output is a simulation log showing
-the RISC-V cores executing on the simulated manycore.")
+example using Verilator simulation.")
     (license license:bsd-3))))
 
 hammerblade-hello

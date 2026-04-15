@@ -1,6 +1,6 @@
 # BSG Bladerunner HammerBlade -- Guix Build
 
-This file documents the four Guix packages defined in `guix.scm` that
+This file documents the five Guix packages defined in `guix.scm` that
 together build and run a HammerBlade manycore simulation from source.
 
 ## Overview
@@ -17,13 +17,19 @@ University of Washington.  Simulating it requires four components:
 
 Approximate build times (single machine):
 
-- **hammerblade-hello** -- ~78 min (compiling ~600 verilated C++ files)
+- **hammerblade-sim** -- ~78 min (compiling ~600 verilated C++ files)
+- **hammerblade-hello** -- ~78 min (same as hammerblade-sim; see note below)
 - **bsg-riscv-toolchain** -- ~10 min (GCC stage1 + newlib + stage2)
 - **verilator-4** -- ~2 min
 - **bsg-manycore** -- <1 min (source copy only)
 
-The verilated model compilation in hammerblade-hello dominates the
-total build time.
+The verilated model compilation dominates the total build time.
+hammerblade-sim and hammerblade-hello both build the verilated model
+independently.  hammerblade-sim exists as a cached artifact for
+interactive use via `guix shell`.  The BSG build system does not
+currently support reusing a pre-built verilated model across different
+build directories (hardcoded paths in generated Makefiles), so
+hammerblade-hello rebuilds it from scratch.
 
 ## Prerequisites
 
@@ -53,6 +59,7 @@ in upstream Guix or require BSG-specific versions:
 - **verilator-4** -- Verilator 4.228; upstream Guix has v5.x but BSG requires v4.x (API change)
 - **bsg-manycore** -- BSG Manycore source tree (RTL, software, build system) fetched from GitHub
 - **bsg-riscv-toolchain** -- GCC 9.2 + binutils 2.32 + newlib + libgcc cross-compiler for `riscv32-unknown-elf-dramfs` with BSG-specific tuning (`-mtune=bsg_vanilla_2020`)
+- **hammerblade-sim** -- verilated simulation platform: builds simsc, platform .so files, and the full exec tree (~1.7 GB) for interactive use
 - **hammerblade-hello** -- verilates the RTL, cross-compiles the kernel, builds the simulation, and runs it
 
 ### Components built from source inside hammerblade-hello
@@ -240,7 +247,34 @@ store paths like `/gnu/store/.../bash/bin/bash`.  The substitute matched
 Fix: only patch Makefiles in the source tree (skip `build-*` dirs),
 and use anchored patterns (`^SHELL =`) instead of bare `/bin/sh`.
 
-## Package 4: hammerblade-hello
+## Package 4: hammerblade-sim
+
+Verilated simulation platform for the HammerBlade manycore.  Builds
+the simsc binary, platform shared libraries, and the full exec tree
+(generated C++, compiled .o files, static .a library).
+
+**Build:** change last line of `guix.scm` to `hammerblade-sim`, then
+`guix build -f guix.scm`
+
+**Source:** Same as hammerblade-hello (bsg_bladerunner commit 8100e97
+with bsg_replicant and basejump_stl submodules).
+
+This package uses the same `%hammerblade-setup-phase` helper as
+hammerblade-hello.  It builds only the simsc target (not the hello
+example), then installs the full exec directory (~1.7 GB) plus
+platform .so files and machine config files to
+`share/hammerblade-sim/`.
+
+The installed tree preserves all intermediate build artifacts (.mk,
+.cpp, .o, .a, .d files) so that in principle a downstream package
+could reuse them.  In practice, the BSG build system's generated
+Makefiles contain hardcoded build paths that prevent reuse across
+different build directories without path fixups, and verilator
+re-runs because .sv source timestamps are newer than the .mk target.
+
+hammerblade-sim is useful for interactive work via `guix shell`.
+
+## Package 5: hammerblade-hello
 
 Builds and runs the HammerBlade "hello world" simulation end-to-end.
 This is the most complex package -- it verilates the full 128-core
@@ -399,6 +433,10 @@ guix build -f guix.scm
 # (edit last line to bsg-riscv-toolchain)
 guix build -f guix.scm
 
+# Build verilated simulation platform (for interactive use)
+# (edit last line to hammerblade-sim)
+guix build -f guix.scm
+
 # Build and run hello world simulation
 # (edit last line to hammerblade-hello)
 guix build -f guix.scm
@@ -411,6 +449,12 @@ bash guix-run.sh hello       # run hello example
 ## Package dependency graph
 
 ```
+hammerblade-sim            (from GitHub, commit 8100e97)
+  |-- verilator-4          (Verilator 4.228, from GitHub)
+  |-- bsg-manycore         (RTL + software, from GitHub, recursive)
+  |-- bsg-replicant-source (simulation harness, from GitHub)
+  +-- basejump-stl-source  (IP library + DRAMSim3, from GitHub, recursive)
+
 hammerblade-hello          (from GitHub, commit 8100e97)
   |-- verilator-4          (Verilator 4.228, from GitHub)
   |-- bsg-manycore         (RTL + software, from GitHub, recursive)
