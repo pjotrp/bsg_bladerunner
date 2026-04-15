@@ -6,7 +6,7 @@
 
 (use-modules
   ((guix licenses) #:prefix license:)
-  (guix packages) (guix gexp) (guix git-download)
+  (guix packages) (guix gexp) (guix git-download) (guix utils)
   (guix build-system copy) (guix build-system gnu)
   (gnu packages algebra) (gnu packages autotools) (gnu packages base)
   (gnu packages bison) (gnu packages compression) (gnu packages commencement)
@@ -620,4 +620,83 @@ packages like hammerblade-hello use this as an input.")
 example using Verilator simulation.")
     (license license:bsd-3))))
 
-hammerblade-hello
+;;;
+;;; HammerBlade examples (builds simsc once, runs multiple SPMD examples)
+;;;
+
+(define-public hammerblade-examples
+  (package
+    (inherit hammerblade-hello)
+    (name "hammerblade-examples")
+    (arguments
+     (substitute-keyword-arguments (package-arguments hammerblade-hello)
+       ((#:phases phases)
+        #~(modify-phases #$phases
+            (replace 'build
+              (lambda* (#:key inputs #:allow-other-keys)
+                ;; Set up the BSG build tree
+                (#$%hammerblade-setup-phase #:inputs inputs)
+                (let* ((toolchain (assoc-ref inputs "bsg-riscv-toolchain"))
+                       (srcdir (getcwd))
+                       (replicant (string-append srcdir "/bsg_replicant"))
+                       (manycore (string-append srcdir "/bsg_manycore"))
+                       (machine-path (string-append replicant
+                         "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
+                       (examples '("hello" "fib" "factorial" "mul_div"
+                                   "bsg_scalar_print")))
+                  (setenv "RISCV" toolchain)
+                  (setenv "PATH"
+                    (string-append toolchain "/bin:"
+                                   srcdir "/verilator-guix/bin:"
+                                   (getenv "PATH")))
+                  ;; Symlink RISC-V toolchain
+                  (mkdir-p (string-append manycore "/software/riscv-tools"))
+                  (symlink toolchain
+                           (string-append manycore
+                             "/software/riscv-tools/riscv-install"))
+                  ;; Clean pre-built kernel artifacts for all examples
+                  (for-each
+                   (lambda (name)
+                     (let ((spmd (string-append manycore
+                                   "/software/spmd/" name)))
+                       (when (file-exists? spmd)
+                         (for-each
+                          (lambda (f) (false-if-exception (delete-file f)))
+                          (find-files spmd "\\.(o|riscv|a|ld)$")))))
+                   examples)
+                  ;; Build first example (triggers simsc build ~78 min)
+                  ;; then remaining examples reuse cached simsc (<1 min each)
+                  (for-each
+                   (lambda (name)
+                     (format #t "~%=== Building example: ~a ===~%" name)
+                     (with-directory-excursion
+                         (string-append replicant "/examples/spmd/" name)
+                       (invoke "make" "CC=gcc" "CXX=g++"
+                               "BSG_PLATFORM=bigblade-verilator"
+                               (string-append "BSG_MACHINE_PATH="
+                                 machine-path)
+                               "exec.log")))
+                   examples))))
+            (replace 'install
+              (lambda* (#:key outputs #:allow-other-keys)
+                (let* ((out (assoc-ref outputs "out"))
+                       (share (string-append out "/share/hammerblade"))
+                       (replicant (string-append (getcwd) "/bsg_replicant"))
+                       (examples '("hello" "fib" "factorial" "mul_div"
+                                   "bsg_scalar_print")))
+                  (mkdir-p share)
+                  (for-each
+                   (lambda (name)
+                     (let ((log (string-append replicant
+                                  "/examples/spmd/" name "/exec.log")))
+                       (when (file-exists? log)
+                         (copy-file log
+                           (string-append share "/" name "-exec.log")))))
+                   examples))))))))
+    (synopsis "HammerBlade manycore SPMD examples")
+    (description "Builds and runs multiple HammerBlade manycore SPMD examples
+using Verilator simulation.  The verilated model is built once (~78 min) and
+reused across all examples.  Includes: hello, fib, factorial, mul_div,
+bsg_scalar_print.")))
+
+hammerblade-examples
