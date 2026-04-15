@@ -1,6 +1,6 @@
 # BSG Bladerunner HammerBlade -- Guix Build
 
-This file documents the five Guix packages defined in `guix.scm` that
+This file documents the six Guix packages defined in `guix.scm` that
 together build and run a HammerBlade manycore simulation from source.
 
 ## Overview
@@ -17,19 +17,19 @@ University of Washington.  Simulating it requires four components:
 
 Approximate build times (single machine):
 
-- **hammerblade-sim** -- ~78 min (compiling ~600 verilated C++ files)
-- **hammerblade-hello** -- ~78 min (same as hammerblade-sim; see note below)
+- **hammerblade-sim** -- ~78 min (compiling ~600 verilated C++ files; built once, cached)
+- **hammerblade-hello** -- <1 min (reuses cached hammerblade-sim)
+- **hammerblade-examples** -- ~5 min (reuses cached hammerblade-sim, runs 4 examples)
 - **bsg-riscv-toolchain** -- ~10 min (GCC stage1 + newlib + stage2)
 - **verilator-4** -- ~2 min
 - **bsg-manycore** -- <1 min (source copy only)
 
-The verilated model compilation dominates the total build time.
-hammerblade-sim and hammerblade-hello both build the verilated model
-independently.  hammerblade-sim exists as a cached artifact for
-interactive use via `guix shell`.  The BSG build system does not
-currently support reusing a pre-built verilated model across different
-build directories (hardcoded paths in generated Makefiles), so
-hammerblade-hello rebuilds it from scratch.
+The verilated model compilation (~78 min) only happens once when
+building hammerblade-sim.  All example packages (hammerblade-hello,
+hammerblade-examples) reuse the cached simsc binary and platform
+libraries.  The reuse works by copying the pre-built exec tree,
+patching the make rules to skip verilator/C++ compilation, and
+creating symlinks for hardcoded DRAMSim3 config paths.
 
 ## Prerequisites
 
@@ -59,8 +59,9 @@ in upstream Guix or require BSG-specific versions:
 - **verilator-4** -- Verilator 4.228; upstream Guix has v5.x but BSG requires v4.x (API change)
 - **bsg-manycore** -- BSG Manycore source tree (RTL, software, build system) fetched from GitHub
 - **bsg-riscv-toolchain** -- GCC 9.2 + binutils 2.32 + newlib + libgcc cross-compiler for `riscv32-unknown-elf-dramfs` with BSG-specific tuning (`-mtune=bsg_vanilla_2020`)
-- **hammerblade-sim** -- verilated simulation platform: builds simsc, platform .so files, and the full exec tree (~1.7 GB) for interactive use
-- **hammerblade-hello** -- verilates the RTL, cross-compiles the kernel, builds the simulation, and runs it
+- **hammerblade-sim** -- verilated simulation platform: builds simsc, platform .so files, and the full exec tree (~1.7 GB); cached and reused by example packages
+- **hammerblade-hello** -- hello world example; reuses pre-built simsc from hammerblade-sim (<1 min)
+- **hammerblade-examples** -- multiple SPMD examples (hello, bsg_scalar_print, fib, mul_div); reuses pre-built simsc (~5 min total)
 
 ### Components built from source inside hammerblade-hello
 
@@ -266,89 +267,41 @@ platform .so files and machine config files to
 `share/hammerblade-sim/`.
 
 The installed tree preserves all intermediate build artifacts (.mk,
-.cpp, .o, .a, .d files) so that in principle a downstream package
-could reuse them.  In practice, the BSG build system's generated
-Makefiles contain hardcoded build paths that prevent reuse across
-different build directories without path fixups, and verilator
-re-runs because .sv source timestamps are newer than the .mk target.
+.cpp, .o, .a, .d files) so that downstream packages can reuse them.
+The example packages (hammerblade-hello, hammerblade-examples) copy
+this tree and patch the make rules to skip verilator/C++ compilation.
 
-hammerblade-sim is useful for interactive work via `guix shell`.
+hammerblade-sim is also useful for interactive work via `guix shell`.
 
 ## Package 5: hammerblade-hello
 
-Builds and runs the HammerBlade "hello world" simulation end-to-end.
-This is the most complex package -- it verilates the full 128-core
-manycore RTL and runs a RISC-V program on it.
+Builds and runs the HammerBlade "hello world" using the pre-built
+simulation from hammerblade-sim (<1 min).
 
 **Build:** change last line of `guix.scm` to `hammerblade-hello`, then
 `guix build -f guix.scm`
 
 ### Source
 
-The top-level source is fetched from GitHub:
-https://github.com/bespoke-silicon-group/bsg_bladerunner
-(commit 8100e97, tag v8.3.2)
-
-A snippet removes submodule stubs that are packaged separately
-(`bsg_manycore`, `aws-fpga`, `verilator`).
-
-Two submodules are fetched as separate `origin` definitions and
-copied into the source tree during the `populate-submodules` phase:
-
-- **bsg_replicant** (commit 83e2441b) from https://github.com/bespoke-silicon-group/bsg_replicant
-- **basejump_stl** (commit 5c66f9de, recursive for DRAMSim3) from https://github.com/bespoke-silicon-group/basejump_stl
-
-The package also uses `bsg-manycore` and `bsg-riscv-toolchain` as
-native-inputs.
+Same as hammerblade-sim (bsg_bladerunner commit 8100e97 with
+bsg_replicant and basejump_stl submodules).  Uses `hammerblade-sim`,
+`bsg-manycore`, and `bsg-riscv-toolchain` as native-inputs.
 
 ### Build phase
 
-The build phase does the following:
+The build phase uses the shared `%hammerblade-setup-phase` helper
+(same as hammerblade-sim) to set up the BSG build tree, then:
 
-**1. Copy bsg_manycore from package**
-
-The bsg-manycore package contents are copied from the Guix store into
-the build tree at `bsg_manycore/`.  A copy (not symlink) is needed
-because the build writes artifacts into this directory.
-
-**2. Create verilator directory layout**
-
-Verilator installs `bin/` and `share/verilator/include/` in separate
-locations.  BSG expects `VERILATOR_ROOT/bin/` and
-`VERILATOR_ROOT/include/` side by side.  We create a unified directory
-with symlinks to both.
-
-**3. Initialize git repositories**
-
-The BSG Makefiles call `git rev-parse --show-toplevel` to find the
-repository root.  We run `git init` + `git commit --allow-empty` in
-each component directory so `git rev-parse` works.
-
-**4. Set environment variables**
-
-The BSG build system expects these variables:
-
-- `BLADERUNNER_ROOT` -- top of the checkout
-- `BSG_MANYCORE_DIR` -- path to bsg_manycore (RTL + software)
-- `BASEJUMP_STL_DIR` -- path to BaseJump STL (IP library)
-- `BSG_F1_DIR` -- path to bsg_replicant (simulation harness)
-- `VERILATOR_ROOT`, `VERILATOR` -- verilator binary and headers
-- `RISCV` -- cross-compiler prefix
-
-**5. Patch Makefiles**
-
-- `hardware.mk`: change `VERILATOR_ROOT =` to `VERILATOR_ROOT ?=`
-  so the environment variable takes effect.
-- `link.mk`: add `-DVL_THREADED` to the verilator compile defines
-  and to the simulator object CXXFLAGS.  Without this,
-  `verilated_threads.h` is included but `VL_THREADED` is not defined,
-  causing `VL_LOCK_SPINS` and `VL_CPU_RELAX` to be undeclared.
-
-**6. Symlink RISC-V toolchain**
-
-The kernel Makefile hardcodes the path
-`bsg_manycore/software/riscv-tools/riscv-install/bin/`.
-We create a symlink from this path to the Guix-packaged toolchain.
+1. Copies the pre-built exec tree from hammerblade-sim
+2. Copies platform .so files preserving the directory layout
+3. Patches `link.mk` to skip verilator, C++ compilation, and linking
+   (replaced with `echo` no-ops since simsc is already in place)
+4. Creates a symlink for the DRAMSim3 config path hardcoded in
+   `libdramsim3.so` (extracts the sim build path from the binary)
+5. Sets `LD_LIBRARY_PATH` so simsc finds its shared libraries
+6. Symlinks the RISC-V toolchain to the expected location
+7. Runs `make exec.log` which now only cross-compiles the kernel,
+   builds the host driver, and runs the simulation
 
 **7. Run `make exec.log`**
 
@@ -419,6 +372,27 @@ Manycore>> Hello from core 0, 0 in group origin=(0,0).
 BSG INFO: Received finish packet from ( 16,  8)
 ```
 
+## Package 6: hammerblade-examples
+
+Builds and runs multiple SPMD examples using the pre-built simulation
+from hammerblade-sim (~5 min total).
+
+**Build:** change last line of `guix.scm` to `hammerblade-examples`, then
+`guix build -f guix.scm`
+
+Inherits from hammerblade-hello and uses the same sim-reuse approach.
+Runs the following examples: hello, bsg_scalar_print, fib, mul_div.
+
+The fib example is patched to reduce N from 15 to 5 and remove
+`bsg_printf` calls, which are expensive in cycle-accurate simulation
+(each printf takes thousands of simulated cycles through the DPI
+interface).
+
+### Verified output
+
+All examples produce `BSG INFO: Received finish packet from ( 16, 8)`
+indicating successful completion.
+
 ## Quick reference
 
 ```bash
@@ -437,8 +411,12 @@ guix build -f guix.scm
 # (edit last line to hammerblade-sim)
 guix build -f guix.scm
 
-# Build and run hello world simulation
+# Build and run hello world (<1 min with cached sim)
 # (edit last line to hammerblade-hello)
+guix build -f guix.scm
+
+# Build and run all examples (~5 min with cached sim)
+# (edit last line to hammerblade-examples)
 guix build -f guix.scm
 
 # Alternative: use guix-run.sh for interactive use
@@ -455,15 +433,15 @@ hammerblade-sim            (from GitHub, commit 8100e97)
   |-- bsg-replicant-source (simulation harness, from GitHub)
   +-- basejump-stl-source  (IP library + DRAMSim3, from GitHub, recursive)
 
-hammerblade-hello          (from GitHub, commit 8100e97)
-  |-- verilator-4          (Verilator 4.228, from GitHub)
-  |-- bsg-manycore         (RTL + software, from GitHub, recursive)
-  |-- bsg-riscv-toolchain  (cross-compiler, from GitHub)
-  |     |-- riscv-binutils-source  (binutils 2.32)
-  |     |-- riscv-gcc-source       (GCC 9.2)
-  |     +-- riscv-newlib-source    (newlib for dramfs)
-  |-- bsg-replicant-source (simulation harness, from GitHub)
-  +-- basejump-stl-source  (IP library + DRAMSim3, from GitHub, recursive)
+hammerblade-hello          (<1 min, reuses hammerblade-sim)
+  |-- hammerblade-sim      (pre-built simsc + platform libs)
+  |-- bsg-manycore         (kernel source)
+  |-- bsg-riscv-toolchain  (cross-compiler)
+  |-- bsg-replicant-source (host driver + make system)
+  +-- basejump-stl-source  (DRAMSim3 configs)
+
+hammerblade-examples       (~5 min, reuses hammerblade-sim)
+  +-- (same deps as hammerblade-hello)
 ```
 
 ## Architecture
