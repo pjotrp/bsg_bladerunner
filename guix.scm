@@ -23,6 +23,22 @@
 (define %riscv32-xgcc (cross-gcc "riscv32-elf"))
 
 ;;;
+;;; Cross-GCC for riscv32-elf with BSG Vanilla 2020 pipeline model
+;;; Contributed by Andrew Waterman and Tommy Jung (BSG, U of Washington)
+;;;
+
+(define-public riscv32-elf-gcc-bsg
+  (package
+    (inherit %riscv32-xgcc)
+    (name "riscv32-elf-gcc-bsg")
+    (source
+     (origin
+       (inherit (package-source %riscv32-xgcc))
+       (patches
+        (append (origin-patches (package-source %riscv32-xgcc))
+                (list (local-file "gcc-bsg-vanilla-2020.patch"))))))))
+
+;;;
 ;;; Newlib for riscv32-elf (bare-metal C library)
 ;;;
 
