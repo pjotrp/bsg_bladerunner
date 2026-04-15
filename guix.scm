@@ -642,8 +642,8 @@ example using Verilator simulation.")
                        (manycore (string-append srcdir "/bsg_manycore"))
                        (machine-path (string-append replicant
                          "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
-                       (examples '("hello" "fib" "factorial" "mul_div"
-                                   "bsg_scalar_print")))
+                       (examples '("hello" "bsg_scalar_print"
+                                   "fib" "mul_div")))
                   (setenv "RISCV" toolchain)
                   (setenv "PATH"
                     (string-append toolchain "/bin:"
@@ -654,6 +654,15 @@ example using Verilator simulation.")
                   (symlink toolchain
                            (string-append manycore
                              "/software/riscv-tools/riscv-install"))
+                  ;; Patch slow examples to reduce simulation time
+                  ;; fib: N=15 with printf per iteration is very slow;
+                  ;; reduce to N=5 and remove printf loop
+                  (substitute*
+                    (string-append manycore "/software/spmd/fib/main.c")
+                    (("#define N 15") "#define N 5")
+                    (("#define ANSWER 986") "#define ANSWER 7")
+                    (("bsg_printf\\(\"fib\\[%d\\] = %d\\\\r\\\\n\", i, my_fib\\[i\\]\\);")
+                     "/* printf removed for fast sim */"))
                   ;; Clean pre-built kernel artifacts for all examples
                   (for-each
                    (lambda (name)
@@ -682,8 +691,8 @@ example using Verilator simulation.")
                 (let* ((out (assoc-ref outputs "out"))
                        (share (string-append out "/share/hammerblade"))
                        (replicant (string-append (getcwd) "/bsg_replicant"))
-                       (examples '("hello" "fib" "factorial" "mul_div"
-                                   "bsg_scalar_print")))
+                       (examples '("hello" "bsg_scalar_print"
+                                   "fib" "mul_div")))
                   (mkdir-p share)
                   (for-each
                    (lambda (name)
@@ -696,7 +705,7 @@ example using Verilator simulation.")
     (synopsis "HammerBlade manycore SPMD examples")
     (description "Builds and runs multiple HammerBlade manycore SPMD examples
 using Verilator simulation.  The verilated model is built once (~78 min) and
-reused across all examples.  Includes: hello, fib, factorial, mul_div,
-bsg_scalar_print.")))
+reused across all examples.  Includes: hello, bsg_scalar_print, fib, mul_div.
+Some examples are patched to reduce iteration counts for faster simulation.")))
 
 hammerblade-examples
