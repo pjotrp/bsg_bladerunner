@@ -55,23 +55,38 @@
               (sha256
                (base32 "116cifjdpmrl0z8rnxhzwq5rmyfk9cazaixl7jw15l8pn3hhbkj6"))))
     (build-system gnu-build-system)
-    (native-inputs (list %riscv32-xgcc %riscv32-xbinutils))
+    (native-inputs (list riscv32-elf-gcc-bsg %riscv32-xbinutils))
     (arguments
      (list
       #:tests? #f
+      #:make-flags
+      #~(list (string-append "SHELL=" (assoc-ref %build-inputs "bash")
+                             "/bin/bash"))
       #:configure-flags
-      #~(list "--target=riscv32-elf"
-              (string-append "--prefix=" #$output)
-              "--disable-newlib-supplied-syscalls"
-              "--enable-newlib-reent-small"
-              "--disable-newlib-io-float"
-              "--enable-lite-exit")
+      #~(let ((bash (string-append (assoc-ref %build-inputs "bash")
+                                   "/bin/bash")))
+          (list "--target=riscv32-elf"
+                (string-append "--prefix=" #$output)
+                (string-append "SHELL=" bash)
+                (string-append "CONFIG_SHELL=" bash)
+                "--disable-newlib-supplied-syscalls"
+                "--enable-newlib-reent-small"
+                "--disable-newlib-io-float"
+                "--enable-lite-exit"
+                "--disable-libgloss"
+                (string-append "CFLAGS_FOR_TARGET="
+                  "-march=rv32imaf -mabi=ilp32f "
+                  "-Wno-error=implicit-function-declaration "
+                  "-Wno-error=implicit-int "
+                  "-Wno-error=int-conversion")))
       #:phases
       #~(modify-phases %standard-phases
           (add-after 'unpack 'set-cross-env
             (lambda _
               (let ((bash (which "bash")))
                 (setenv "CONFIG_SHELL" bash)
+                (setenv "SHELL" bash)
+                ;; Export SHELL so recursive configure/make inherits it
                 (setenv "SHELL" bash)
                 (setenv "CC_FOR_TARGET" "riscv32-elf-gcc")
                 (setenv "AR_FOR_TARGET" "riscv32-elf-ar")
@@ -80,9 +95,11 @@
                 ;; Old newlib + GCC 14 compatibility
                 (setenv "CFLAGS_FOR_TARGET"
                   (string-append
+                   "-march=rv32imaf -mabi=ilp32f "
                    "-Wno-error=implicit-function-declaration "
                    "-Wno-error=implicit-int "
-                   "-Wno-error=int-conversion"))))))))
+                   "-Wno-error=int-conversion")))))
+)))
     (home-page "https://sourceware.org/newlib/")
     (synopsis "C library for riscv32-elf bare-metal targets")
     (description "Newlib C library cross-compiled for riscv32-elf with
@@ -625,7 +642,9 @@ packages like hammerblade-hello use this as an input.")
                                   '("bsg_manycore" "aws-fpga" "verilator"))))))
     (build-system gnu-build-system)
     (native-inputs
-     (list hammerblade-sim verilator-4 bsg-manycore bsg-riscv-toolchain
+     (list hammerblade-sim verilator-4 bsg-manycore
+           riscv32-elf-gcc-bsg `(,riscv32-elf-gcc-bsg "lib")
+           riscv32-elf-newlib %riscv32-xbinutils
            gcc-toolchain-12
            bc git-minimal perl python-wrapper which coreutils))
     (inputs (list zlib))
@@ -634,6 +653,7 @@ packages like hammerblade-hello use this as an input.")
       #:tests? #f
       #:modules '((guix build gnu-build-system)
                   (guix build utils)
+                  (ice-9 ftw)
                   (ice-9 popen)
                   (ice-9 rdelim))
       #:phases
@@ -656,7 +676,9 @@ packages like hammerblade-hello use this as an input.")
               (#$%hammerblade-setup-phase #:inputs inputs)
               (let* ((sim (assoc-ref inputs "hammerblade-sim"))
                      (sim-dir (string-append sim "/share/hammerblade-sim"))
-                     (toolchain (assoc-ref inputs "bsg-riscv-toolchain"))
+                     (xgcc (assoc-ref inputs "riscv32-elf-gcc-bsg"))
+                     (newlib (assoc-ref inputs "riscv32-elf-newlib"))
+                     (xbinutils (assoc-ref inputs "binutils-cross-riscv32-elf"))
                      (srcdir (getcwd))
                      (replicant (string-append srcdir "/bsg_replicant"))
                      (manycore (string-append srcdir "/bsg_manycore"))
@@ -665,17 +687,74 @@ packages like hammerblade-hello use this as an input.")
                      (exec-dir (string-append machine-path
                                  "/bigblade-verilator/exec"))
                      (link-mk (string-append replicant
-                       "/libraries/platforms/bigblade-verilator/link.mk")))
-                (setenv "RISCV" toolchain)
+                       "/libraries/platforms/bigblade-verilator/link.mk"))
+                     ;; Create a unified toolchain directory with
+                     ;; riscv32-unknown-elf-dramfs-* symlinks pointing
+                     ;; to riscv32-elf-* binaries (BSG build system
+                     ;; expects the dramfs prefix)
+                     (tc-dir (string-append srcdir "/riscv-toolchain")))
+                (mkdir-p (string-append tc-dir "/bin"))
+                ;; Symlink gcc and g++ with BSG tuning wrapper scripts
+                (for-each
+                 (lambda (tool)
+                   (let ((src (string-append xgcc "/bin/riscv32-elf-" tool))
+                         (dst (string-append tc-dir "/bin/riscv32-unknown-elf-dramfs-" tool)))
+                     (when (file-exists? src)
+                       (symlink src dst))))
+                 '("gcc" "g++" "cpp"))
+                ;; Symlink binutils
+                (for-each
+                 (lambda (tool)
+                   (let ((src (string-append xbinutils "/bin/riscv32-elf-" tool))
+                         (dst (string-append tc-dir "/bin/riscv32-unknown-elf-dramfs-" tool)))
+                     (when (file-exists? src)
+                       (symlink src dst))))
+                 '("ar" "as" "ld" "nm" "objcopy" "objdump" "ranlib"
+                   "readelf" "size" "strings" "strip"))
+                ;; Set up lib/include dirs so gcc finds newlib + libgcc
+                ;; Find the gcc lib output by scanning inputs
+                (let* ((gcc-lib-dir
+                        (let loop ((ins inputs))
+                          (if (null? ins) #f
+                              (let ((dir (string-append (cdar ins)
+                                           "/lib/gcc/riscv32-elf")))
+                                (if (file-exists? dir) (cdar ins)
+                                    (loop (cdr ins)))))))
+                       (gcc-ver
+                        (car (scandir
+                          (string-append gcc-lib-dir "/lib/gcc/riscv32-elf")
+                          (lambda (f) (not (member f '("." ".."))))))))
+                  (mkdir-p (string-append tc-dir "/lib/gcc/riscv32-unknown-elf-dramfs"))
+                  (symlink (string-append gcc-lib-dir "/lib/gcc/riscv32-elf/" gcc-ver)
+                    (string-append tc-dir "/lib/gcc/riscv32-unknown-elf-dramfs/" gcc-ver))
+                  (mkdir-p (string-append tc-dir "/riscv32-unknown-elf-dramfs"))
+                  (symlink (string-append newlib "/riscv32-elf/lib")
+                    (string-append tc-dir "/riscv32-unknown-elf-dramfs/lib"))
+                  (symlink (string-append newlib "/riscv32-elf/include")
+                    (string-append tc-dir "/riscv32-unknown-elf-dramfs/include")))
+                (setenv "RISCV" tc-dir)
                 (setenv "PATH"
-                  (string-append toolchain "/bin:"
+                  (string-append tc-dir "/bin:"
                                  srcdir "/verilator-guix/bin:"
                                  (getenv "PATH")))
                 ;; Symlink RISC-V toolchain to expected location
                 (mkdir-p (string-append manycore "/software/riscv-tools"))
-                (symlink toolchain
+                (symlink tc-dir
                          (string-append manycore
                            "/software/riscv-tools/riscv-install"))
+                ;; Patch Makefile.builddefs to drop -mtune=bsg_vanilla_2020
+                ;; Add -mabi=ilp32f (GCC 14 defaults to ilp32d) and
+                ;; remove -mtune=bsg_vanilla_2020 (triggers ICE in GCC 14
+                ;; scheduler; the pipeline model needs updates for GCC 14)
+                (substitute* (string-append manycore
+                  "/software/mk/Makefile.builddefs")
+                  (("-march=\\$\\(ARCH_OP\\) -static")
+                   "-march=$(ARCH_OP) -mabi=ilp32f -static")
+                  (("-mtune=bsg_vanilla_2020") "")
+                  ;; Add newlib lib path to link opts
+                  (("RISCV_LINK_OPTS \\+= -march=\\$\\(ARCH_OP\\)")
+                   (string-append "RISCV_LINK_OPTS += -march=$(ARCH_OP) -mabi=ilp32f"
+                     " -L" newlib "/riscv32-elf/lib")))
                 ;; Copy pre-built exec tree from hammerblade-sim
                 (copy-recursively (string-append sim-dir "/exec") exec-dir)
                 (for-each
@@ -773,7 +852,9 @@ example using Verilator simulation.")
                 (#$%hammerblade-setup-phase #:inputs inputs)
                 (let* ((sim (assoc-ref inputs "hammerblade-sim"))
                        (sim-dir (string-append sim "/share/hammerblade-sim"))
-                       (toolchain (assoc-ref inputs "bsg-riscv-toolchain"))
+                       (xgcc (assoc-ref inputs "riscv32-elf-gcc-bsg"))
+                       (newlib (assoc-ref inputs "riscv32-elf-newlib"))
+                       (xbinutils (assoc-ref inputs "binutils-cross-riscv32-elf"))
                        (srcdir (getcwd))
                        (replicant (string-append srcdir "/bsg_replicant"))
                        (manycore (string-append srcdir "/bsg_manycore"))
@@ -783,18 +864,62 @@ example using Verilator simulation.")
                                    "/bigblade-verilator/exec"))
                        (link-mk (string-append replicant
                          "/libraries/platforms/bigblade-verilator/link.mk"))
+                       (tc-dir (string-append srcdir "/riscv-toolchain"))
                        (examples '("hello" "bsg_scalar_print"
                                    "fib" "mul_div")))
-                  (setenv "RISCV" toolchain)
+                  ;; Create toolchain wrapper (same as hammerblade-hello)
+                  (mkdir-p (string-append tc-dir "/bin"))
+                  (for-each
+                   (lambda (tool)
+                     (let ((src (string-append xgcc "/bin/riscv32-elf-" tool))
+                           (dst (string-append tc-dir "/bin/riscv32-unknown-elf-dramfs-" tool)))
+                       (when (file-exists? src) (symlink src dst))))
+                   '("gcc" "g++" "cpp"))
+                  (for-each
+                   (lambda (tool)
+                     (let ((src (string-append xbinutils "/bin/riscv32-elf-" tool))
+                           (dst (string-append tc-dir "/bin/riscv32-unknown-elf-dramfs-" tool)))
+                       (when (file-exists? src) (symlink src dst))))
+                   '("ar" "as" "ld" "nm" "objcopy" "objdump" "ranlib"
+                     "readelf" "size" "strings" "strip"))
+                  (let* ((gcc-lib-dir
+                          (let loop ((ins inputs))
+                            (if (null? ins) #f
+                                (let ((dir (string-append (cdar ins)
+                                             "/lib/gcc/riscv32-elf")))
+                                  (if (file-exists? dir) (cdar ins)
+                                      (loop (cdr ins)))))))
+                         (gcc-ver
+                          (car (scandir
+                            (string-append gcc-lib-dir "/lib/gcc/riscv32-elf")
+                            (lambda (f) (not (member f '("." ".."))))))))
+                    (mkdir-p (string-append tc-dir "/lib/gcc/riscv32-unknown-elf-dramfs"))
+                    (symlink (string-append gcc-lib-dir "/lib/gcc/riscv32-elf/" gcc-ver)
+                      (string-append tc-dir "/lib/gcc/riscv32-unknown-elf-dramfs/" gcc-ver))
+                    (mkdir-p (string-append tc-dir "/riscv32-unknown-elf-dramfs"))
+                    (symlink (string-append newlib "/riscv32-elf/lib")
+                      (string-append tc-dir "/riscv32-unknown-elf-dramfs/lib"))
+                    (symlink (string-append newlib "/riscv32-elf/include")
+                      (string-append tc-dir "/riscv32-unknown-elf-dramfs/include")))
+                  (setenv "RISCV" tc-dir)
                   (setenv "PATH"
-                    (string-append toolchain "/bin:"
+                    (string-append tc-dir "/bin:"
                                    srcdir "/verilator-guix/bin:"
                                    (getenv "PATH")))
-                  ;; Symlink RISC-V toolchain
+                  ;; Symlink RISC-V toolchain to expected location
                   (mkdir-p (string-append manycore "/software/riscv-tools"))
-                  (symlink toolchain
+                  (symlink tc-dir
                            (string-append manycore
                              "/software/riscv-tools/riscv-install"))
+                  ;; Patch build defs for GCC 14 compatibility
+                  (substitute* (string-append manycore
+                    "/software/mk/Makefile.builddefs")
+                    (("-march=\\$\\(ARCH_OP\\) -static")
+                     "-march=$(ARCH_OP) -mabi=ilp32f -static")
+                    (("-mtune=bsg_vanilla_2020") "")
+                    (("RISCV_LINK_OPTS \\+= -march=\\$\\(ARCH_OP\\)")
+                     (string-append "RISCV_LINK_OPTS += -march=$(ARCH_OP) -mabi=ilp32f"
+                       " -L" newlib "/riscv32-elf/lib")))
                   ;; Copy pre-built exec tree from hammerblade-sim
                   (copy-recursively (string-append sim-dir "/exec") exec-dir)
                   (for-each
