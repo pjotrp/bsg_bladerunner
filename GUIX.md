@@ -1,6 +1,6 @@
 # BSG Bladerunner HammerBlade -- Guix Build
 
-This file documents the six Guix packages defined in `guix.scm` that
+This file documents the Guix packages defined in `guix.scm` that
 together build and run a HammerBlade manycore simulation from source.
 
 ## Overview
@@ -10,26 +10,35 @@ University of Washington.  Simulating it requires four components:
 
 1. **Verilator 4.228** -- translates the SystemVerilog RTL into C++
 2. **BSG Manycore** -- RTL, software libraries, and build infrastructure
-3. **RISC-V cross-compiler** -- GCC 9.2 targeting rv32imaf bare-metal
+3. **RISC-V cross-compiler** -- GCC 14.3 rv32imaf bare-metal (Guix cross-gcc + BSG patch)
 4. **Simulation harness** -- verilated model + host driver + RISC-V kernel
 
 ## Build times
 
-Approximate build times (single machine):
+Measured build times (on a single machine, with inputs cached):
 
-- **hammerblade-sim** -- ~78 min (compiling ~600 verilated C++ files; built once, cached)
-- **hammerblade-hello** -- <1 min (reuses cached hammerblade-sim)
-- **hammerblade-examples** -- ~5 min (reuses cached hammerblade-sim, runs 4 examples)
-- **bsg-riscv-toolchain** -- ~10 min (GCC stage1 + newlib + stage2)
+- **hammerblade-sim** -- ~78 min (one-time build, compiles ~600 verilated C++ files; cached forever)
+- **hammerblade-hello** -- ~2m 45s (kernel compile + host driver + 1 simulation run)
+- **hammerblade-examples** -- ~1m 28s (kernel compile + 4 simulation runs for hello/bsg_scalar_print/fib/mul_div)
+- **riscv32-elf-gcc-bsg** -- ~5 min (Guix cross-gcc 14.3 + BSG Vanilla 2020 patch)
+- **riscv32-elf-newlib** -- ~1 min (BSG newlib fork for rv32imaf)
 - **verilator-4** -- ~2 min
 - **bsg-manycore** -- <1 min (source copy only)
 
 The verilated model compilation (~78 min) only happens once when
 building hammerblade-sim.  All example packages (hammerblade-hello,
-hammerblade-examples) reuse the cached simsc binary and platform
-libraries.  The reuse works by copying the pre-built exec tree,
-patching the make rules to skip verilator/C++ compilation, and
-creating symlinks for hardcoded DRAMSim3 config paths.
+hammerblade-examples) reuse the cached simsc binary (~65 MB) and
+platform libraries.  The reuse works by copying the pre-built simsc,
+creating empty stubs for make dependencies (.a, .mk, simulator.o),
+patching the make rules to skip verilator/C++ compile/link, and
+creating a symlink for the DRAMSim3 config path hardcoded in
+libdramsim3.so.
+
+## Package output sizes
+
+- **hammerblade-sim**: 69 MB (simsc 65 MB + .so libs 4 MB + machine config)
+- **hammerblade-hello**: a few MB (exec.log + main.riscv)
+- **hammerblade-examples**: a few MB (4 exec.log + 4 main.riscv)
 
 ## Prerequisites
 
@@ -41,12 +50,11 @@ GitHub by Guix using `git-fetch`.
 The following tools come from Guix rather than being built from source:
 
 - **gcc-toolchain-12** -- host C/C++ compiler (builds verilated model, host driver)
-- **gcc-toolchain-11** -- host compiler for building the RISC-V cross-compiler
-- **gmp, mpfr, mpc, isl** -- GCC build prerequisites (used as system libraries)
+- **cross-gcc "riscv32-elf"** (GCC 14.3) -- base for riscv32-elf-gcc-bsg
+- **cross-binutils "riscv32-elf"** (binutils 2.44) -- unbundled RISC-V binutils, used as-is
 - **perl, python** -- used by verilator and the BSG build system
-- **autoconf, automake, bison, flex** -- GNU build tools for verilator and GCC
-- **linux-libre-headers** -- kernel headers (needed by the cross-compiler configure)
-- **zlib** -- compression library (LTO support in GCC, also linked into simsc)
+- **autoconf, automake, bison, flex** -- GNU build tools for verilator
+- **zlib** -- compression library (LTO support, also linked into simsc)
 - **git** -- the BSG Makefiles call `git rev-parse` to locate repository roots
 - **bc** -- used by BSG machine config Makefiles for arithmetic
 - **coreutils, which** -- standard Unix tools used during the build
@@ -58,10 +66,14 @@ in upstream Guix or require BSG-specific versions:
 
 - **verilator-4** -- Verilator 4.228; upstream Guix has v5.x but BSG requires v4.x (API change)
 - **bsg-manycore** -- BSG Manycore source tree (RTL, software, build system) fetched from GitHub
-- **bsg-riscv-toolchain** -- GCC 9.2 + binutils 2.32 + newlib + libgcc cross-compiler for `riscv32-unknown-elf-dramfs` with BSG-specific tuning (`-mtune=bsg_vanilla_2020`)
-- **hammerblade-sim** -- verilated simulation platform: builds simsc, platform .so files, and the full exec tree (~1.7 GB); cached and reused by example packages
-- **hammerblade-hello** -- hello world example; reuses pre-built simsc from hammerblade-sim (<1 min)
-- **hammerblade-examples** -- multiple SPMD examples (hello, bsg_scalar_print, fib, mul_div); reuses pre-built simsc (~5 min total)
+- **riscv32-elf-gcc-bsg** -- Guix `cross-gcc "riscv32-elf"` (GCC 14.3) + BSG Vanilla 2020 pipeline model patch (contributed by Andrew Waterman and Tommy Jung)
+- **riscv32-elf-newlib** -- BSG newlib fork (from `bsg_newlib_dramfs`) compiled for rv32imaf/ilp32f with small reent struct
+- **hammerblade-sim** -- verilated simulation platform: installs simsc binary (~65 MB) + platform .so files + machine config (69 MB total)
+- **hammerblade-hello** -- hello world example; reuses pre-built simsc (~2m 45s)
+- **hammerblade-examples** -- four SPMD examples (hello, bsg_scalar_print, fib, mul_div) with binary-hash + cycle-count regression tests (~1m 28s)
+
+Plus Guix's standard `cross-binutils "riscv32-elf"` (binutils 2.44) used
+as-is without patches.
 
 ### Components built from source inside hammerblade-hello
 
@@ -119,136 +131,52 @@ the following directories to `share/bsg-manycore/`:
 The `riscv-tools/` directory under `software/` is excluded from the
 install plan since the toolchain is packaged separately.
 
-## Package 3: bsg-riscv-toolchain
+## Package 3: riscv32-elf-gcc-bsg
 
-A bare-metal RISC-V cross-compiler for the HammerBlade manycore tiles.
-The tiles run rv32imaf (32-bit, integer, multiply, atomics, single-float)
-with a custom ABI (`riscv32-unknown-elf-dramfs`).
+RISC-V cross-compiler for bare-metal `riscv32-elf` targets, derived
+from Guix's `cross-gcc "riscv32-elf"` (GCC 14.3.0) with a BSG-specific
+pipeline model patch.
 
-**Build:** change last line of `guix.scm` to `bsg-riscv-toolchain`, then
-`guix build -f guix.scm`
+**Build:** change last line of `guix.scm` to `riscv32-elf-gcc-bsg`.
 
-### Source
+### Patch
 
-The top-level source is fetched from GitHub:
-https://github.com/bespoke-silicon-group/riscv-gnu-toolchain
-(commit 6567088)
+The patch (`gcc-bsg-vanilla-2020.patch`, ~170 lines) adds the BSG
+Vanilla 2020 pipeline scheduling model to GCC 14's RISC-V backend.
+Credits: Andrew Waterman (andrew@sifive.com) and Tommy Jung
+(BSG, University of Washington).
 
-Three submodules are fetched as separate `origin` definitions and
-copied into the source tree during the `populate-submodules` phase:
+The patch touches 5 files in `gcc/config/riscv/`:
+- `bsg_vanilla_2020.md` (new) -- pipeline scheduling description
+- `riscv-opts.h` -- adds `bsg_vanilla_2020` to enum
+- `riscv.cc` -- adds tune_param struct
+- `riscv-cores.def` -- registers the tuning
+- `riscv.md` -- tune attr + include
 
-- **riscv-binutils** (commit d91cadb4) from https://github.com/riscv/riscv-binutils-gdb
-- **riscv-gcc** (commit 894ea43d) from https://github.com/bespoke-silicon-group/riscv-gcc
-- **riscv-newlib** (commit fa35f8c5) from https://github.com/bespoke-silicon-group/bsg_newlib_dramfs
+**Status:** The `-mtune=bsg_vanilla_2020` flag is accepted by the
+patched GCC, but triggers an ICE in GCC 14's scheduler when compiling
+real code (the pipeline model needs updates for GCC 14's changed
+scheduler internals).  The flag is currently disabled in
+`hammerblade-hello`/`hammerblade-examples` builds.
 
-The remaining submodules (qemu, riscv-gdb, riscv-glibc, riscv-dejagnu)
-are not needed for a bare-metal cross-compiler and are not fetched.
-This avoids downloading several GB of unnecessary source code.
+## Package 4: riscv32-elf-newlib
 
-### Configure phase
+Newlib C library cross-compiled for `riscv32-elf` (rv32imaf/ilp32f)
+with the small reentrant struct (saves per-tile SRAM in the manycore).
 
-This is the most delicate part.  Three problems must be solved:
+**Source:** BSG's newlib fork (`bsg_newlib_dramfs` commit fa35f8c5),
+which adds a DRAM filesystem BSP (libgloss/dramfs) and a small malloc
+page size.
 
-1. **glibc header leakage.**  Guix's `gcc-toolchain` puts glibc headers
-   in `C_INCLUDE_PATH`.  When building a *bare-metal* cross-compiler,
-   these headers leak into the cross-compiler's `cc1` search path.
-   Newlib then picks up glibc's `limits.h` which uses `__GLIBC_USE()`,
-   a macro that GCC 9.2 does not understand.
+**Key flags:**
+- `--enable-newlib-reent-small` -- reduces per-thread reent struct
+- `--disable-newlib-io-float` -- no float I/O (saves code size)
+- `--disable-libgloss` -- we don't need the BSPs (SPMD kernels have
+  their own startup code)
+- `-march=rv32imaf -mabi=ilp32f` -- matches BSG hardware
+- `-Wno-error=implicit-function-declaration` etc. -- old code, GCC 14 compat
 
-   Fix: override `C_INCLUDE_PATH` to contain *only*
-   `linux-libre-headers/include`, `zlib/include`, and the GCC
-   prerequisite libraries (`gmp`, `mpfr`, `mpc`, `isl`).
-   Set `LIBRARY_PATH` similarly.  Unset `CPATH`.
-
-2. **fixincludes copies host headers.**  GCC's fixincludes mechanism
-   scans `/usr/include` (or equivalent) and copies "broken" headers
-   into the cross-compiler.  In Guix, this copies glibc headers.
-
-   Fix: replace `mkfixinc.sh` with a no-op script that creates an
-   empty `fixinc.sh`.
-
-3. **Missing limits.h.**  With fixincludes disabled, the cross-compiler
-   lacks `include-fixed/limits.h`.  Newlib needs `CHAR_BIT`, `INT_MAX`,
-   etc.
-
-   Fix: create a minimal `limits.h` that defines these constants
-   using GCC builtins (`__CHAR_BIT__`, `__INT_MAX__`, etc.).
-
-After these fixes, configure runs with:
-```
---disable-linux --with-arch=rv32imaf --with-abi=ilp32f
---disable-gdb --with-tune=bsg_vanilla_2020 --without-headers
-```
-
-### Build phase
-
-The build has four stages:
-
-**Stage 1: Binutils + GCC stage1**
-
-```
-make stamps/build-binutils-newlib    # assembler, linker, objdump, etc.
-make stamps/build-gcc-newlib-stage1  # minimal GCC (no libc yet)
-```
-
-GCC's build checks that `tm.texi` (target machine documentation) is
-up-to-date by comparing timestamps.  Guix's shebang patching changes
-file timestamps, causing this check to fail.  The fix is to touch the
-`s-tm-texi` stamp file so the check sees it as current.  If it still
-fails, we touch all `s-tm-texi` files and retry.
-
-**Stage 2: Install GCC headers**
-
-The normal `make install` for GCC fails (tm.texi again), so we manually
-copy GCC's internal headers (`stddef.h`, `stdarg.h`, `stdbool.h`, etc.)
-from `build-gcc-newlib-stage1/gcc/include/` to the output prefix.
-We also install our minimal `limits.h` into `include-fixed/`.
-
-**Stage 3: Newlib + newlib-nano**
-
-```
-make stamps/build-newlib       # full newlib (libc.a, libm.a)
-make stamps/build-newlib-nano  # size-optimized variant
-make stamps/merge-newlib-nano  # install nano as libc_nano.a alongside libc.a
-```
-
-Newlib is a C library for embedded/bare-metal targets.  It provides
-`printf`, `malloc`, `memcpy`, etc.  The nano variant trades features
-for smaller code size.
-
-**Stage 4: libgcc**
-
-```
-make stamps/build-gcc-newlib-stage2  # full GCC with libgcc
-```
-
-Stage2 rebuilds GCC now that newlib is available, producing `libgcc.a`
-(compiler runtime: soft-float routines, integer division, etc.).
-This is copied to the output prefix.
-
-### Output
-
-```
-bin/riscv32-unknown-elf-dramfs-gcc   # cross-compiler
-bin/riscv32-unknown-elf-dramfs-as    # assembler
-bin/riscv32-unknown-elf-dramfs-ld    # linker
-lib/gcc/.../9.2.0/libgcc.a          # compiler runtime
-riscv32-unknown-elf-dramfs/lib/libc.a   # newlib
-riscv32-unknown-elf-dramfs/lib/libm.a   # math library
-```
-
-### Shebang doubling bug
-
-An earlier version replaced `/bin/sh` globally in all Makefiles.
-Generated Makefiles (in `build-*/`) already contained correct Guix
-store paths like `/gnu/store/.../bash/bin/bash`.  The substitute matched
-`/bin/bash` as a *substring* of the store path, producing
-`.../bash/.../bash/bin/bash` -- a doubled, nonexistent path.
-
-Fix: only patch Makefiles in the source tree (skip `build-*` dirs),
-and use anchored patterns (`^SHELL =`) instead of bare `/bin/sh`.
-
-## Package 4: hammerblade-sim
+## Package 5: hammerblade-sim
 
 Verilated simulation platform for the HammerBlade manycore.  Builds
 the simsc binary, platform shared libraries, and the full exec tree
@@ -273,7 +201,7 @@ this tree and patch the make rules to skip verilator/C++ compilation.
 
 hammerblade-sim is also useful for interactive work via `guix shell`.
 
-## Package 5: hammerblade-hello
+## Package 6: hammerblade-hello
 
 Builds and runs the HammerBlade "hello world" using the pre-built
 simulation from hammerblade-sim (<1 min).
@@ -372,10 +300,10 @@ Manycore>> Hello from core 0, 0 in group origin=(0,0).
 BSG INFO: Received finish packet from ( 16,  8)
 ```
 
-## Package 6: hammerblade-examples
+## Package 7: hammerblade-examples
 
 Builds and runs multiple SPMD examples using the pre-built simulation
-from hammerblade-sim (~5 min total).
+from hammerblade-sim (~1m 28s total).
 
 **Build:** change last line of `guix.scm` to `hammerblade-examples`, then
 `guix build -f guix.scm`
@@ -387,6 +315,34 @@ The fib example is patched to reduce N from 15 to 5 and remove
 `bsg_printf` calls, which are expensive in cycle-accurate simulation
 (each printf takes thousands of simulated cycles through the DPI
 interface).
+
+### Regression test phase
+
+A `check-regression` phase runs after the build and prints a table of
+SHA-256 hashes + cycle counts for each example, compared against
+baselines embedded in the package definition.
+
+```
+========================================
+REGRESSION TEST: binary hash + cycles
+========================================
+example               sha256[0:16]        cycles      baseline    ratio
+hello                 90ca46f33a31ecff    4060602     4060602      1.000
+bsg_scalar_print      7fc27324a6cbab72    747918      747918       1.000
+fib                   427569414d696b96    866466      866466       1.000
+mul_div               4a0c35dea6c9e5a6    966366      966366       1.000
+========================================
+```
+
+The build FAILS if any example is >20% slower than its baseline, or
+if any example is missing.  The hashes catch any unintended binary
+change (compiler flags, code, optimization level, etc.).
+
+### Install phase
+
+Copies to `$out/share/hammerblade/`:
+- `<example>-exec.log` -- full simulation log for each example
+- `<example>.riscv` -- the compiled RISC-V binary
 
 ### Verified output
 
@@ -403,19 +359,23 @@ guix build -f guix.scm   # (with last line = verilator-4)
 # (edit last line to bsg-manycore)
 guix build -f guix.scm
 
-# Build RISC-V cross-compiler
-# (edit last line to bsg-riscv-toolchain)
+# Build RISC-V cross-compiler (~5 min)
+# (edit last line to riscv32-elf-gcc-bsg)
 guix build -f guix.scm
 
-# Build verilated simulation platform (for interactive use)
+# Build newlib for riscv32-elf (~1 min)
+# (edit last line to riscv32-elf-newlib)
+guix build -f guix.scm
+
+# Build verilated simulation platform (~78 min, one time)
 # (edit last line to hammerblade-sim)
 guix build -f guix.scm
 
-# Build and run hello world (<1 min with cached sim)
+# Build and run hello world (~2m 45s with cached sim)
 # (edit last line to hammerblade-hello)
 guix build -f guix.scm
 
-# Build and run all examples (~5 min with cached sim)
+# Build and run all examples with regression test (~1m 28s with cached sim)
 # (edit last line to hammerblade-examples)
 guix build -f guix.scm
 
@@ -427,20 +387,22 @@ bash guix-run.sh hello       # run hello example
 ## Package dependency graph
 
 ```
-hammerblade-sim            (from GitHub, commit 8100e97)
+hammerblade-sim            (~78 min, from GitHub commit 8100e97)
   |-- verilator-4          (Verilator 4.228, from GitHub)
-  |-- bsg-manycore         (RTL + software, from GitHub, recursive)
+  |-- bsg-manycore         (RTL + software, recursive for HardFloat)
   |-- bsg-replicant-source (simulation harness, from GitHub)
-  +-- basejump-stl-source  (IP library + DRAMSim3, from GitHub, recursive)
+  +-- basejump-stl-source  (IP library + DRAMSim3, recursive)
 
-hammerblade-hello          (<1 min, reuses hammerblade-sim)
-  |-- hammerblade-sim      (pre-built simsc + platform libs)
+hammerblade-hello          (~2m 45s, reuses hammerblade-sim)
+  |-- hammerblade-sim      (pre-built simsc 65 MB + platform libs)
   |-- bsg-manycore         (kernel source)
-  |-- bsg-riscv-toolchain  (cross-compiler)
+  |-- riscv32-elf-gcc-bsg  (Guix cross-gcc 14.3 + BSG tune patch)
+  |-- riscv32-elf-newlib   (BSG newlib fork, rv32imaf/ilp32f)
+  |-- cross-binutils       (Guix standard, unpatched)
   |-- bsg-replicant-source (host driver + make system)
   +-- basejump-stl-source  (DRAMSim3 configs)
 
-hammerblade-examples       (~5 min, reuses hammerblade-sim)
+hammerblade-examples       (~1m 28s, reuses hammerblade-sim)
   +-- (same deps as hammerblade-hello)
 ```
 
