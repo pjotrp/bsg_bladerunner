@@ -586,11 +586,16 @@ infrastructure for the BSG Manycore processor used in HammerBlade.")
                      (machine-path (string-append replicant
                        "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
                      (dest (string-append out "/share/hammerblade-sim")))
-                ;; Install the full verilated exec directory (simsc +
-                ;; generated .mk/.cpp/.o/.a so make sees them as up-to-date)
-                (copy-recursively
-                 (string-append machine-path "/bigblade-verilator/exec")
-                 (string-append dest "/exec"))
+                ;; Install only simsc binary (~65 MB).  The ~1.5 GB of
+                ;; verilator .cpp/.o/.a/.mk files are not needed:
+                ;; downstream patches link.mk to skip verilator/compile/
+                ;; link entirely; make sees pre-built simsc as the target.
+                (mkdir-p (string-append dest "/exec"))
+                (copy-file
+                 (string-append machine-path
+                   "/bigblade-verilator/exec/simsc")
+                 (string-append dest "/exec/simsc"))
+                (chmod (string-append dest "/exec/simsc") #o755)
                 ;; Install platform shared libraries in their tree layout
                 (for-each
                  (lambda (f)
@@ -757,11 +762,21 @@ packages like hammerblade-hello use this as an input.")
                   (("RISCV_LINK_OPTS \\+= -march=\\$\\(ARCH_OP\\)")
                    (string-append "RISCV_LINK_OPTS += -march=$(ARCH_OP) -mabi=ilp32f"
                      " -L" newlib "/riscv32-elf/lib")))
-                ;; Copy pre-built exec tree from hammerblade-sim
+                ;; Copy pre-built simsc from hammerblade-sim and create
+                ;; empty stubs for .a and .mk (make dependencies)
                 (copy-recursively (string-append sim-dir "/exec") exec-dir)
                 (for-each
                  (lambda (f) (false-if-exception (make-file-writable f)))
                  (find-files exec-dir "." #:directories? #t))
+                (with-output-to-file
+                  (string-append exec-dir "/Vreplicant_tb_top__ALL.a")
+                  (lambda () (display "")))
+                (with-output-to-file
+                  (string-append exec-dir "/Vreplicant_tb_top.mk")
+                  (lambda () (display "# stub\n")))
+                (with-output-to-file
+                  (string-append exec-dir "/bsg_manycore_simulator.o")
+                  (lambda () (display "")))
                 ;; Copy .so files preserving tree layout
                 (for-each
                  (lambda (f)
@@ -781,7 +796,9 @@ packages like hammerblade-hello use this as an input.")
                   (("\\$\\(MAKE\\) OPT_FAST=\"-O2 -march=native\" -C \\$\\(dir \\$@\\) -f \\$\\(notdir \\$<\\) default")
                    "echo 'skipping C++ compile (pre-built)'")
                   (("\\$\\(LD\\) -o \\$@ \\$\\(LDFLAGS\\) \\$\\^")
-                   "echo 'skipping link (pre-built)'"))
+                   "echo 'skipping link (pre-built)'")
+                  (("\\$\\(CXX\\) -c \\$\\(CXXFLAGS\\) -I\\$\\(dir \\$@\\) \\$\\^ -o \\$@")
+                   "echo 'skipping simulator.o compile (pre-built)'"))
                 ;; Clean pre-built kernel artifacts
                 (for-each
                  (lambda (f) (false-if-exception (delete-file f)))
@@ -922,11 +939,20 @@ example using Verilator simulation.")
                     (("RISCV_LINK_OPTS \\+= -march=\\$\\(ARCH_OP\\)")
                      (string-append "RISCV_LINK_OPTS += -march=$(ARCH_OP) -mabi=ilp32f"
                        " -L" newlib "/riscv32-elf/lib")))
-                  ;; Copy pre-built exec tree from hammerblade-sim
+                  ;; Copy pre-built simsc and create make dep stubs
                   (copy-recursively (string-append sim-dir "/exec") exec-dir)
                   (for-each
                    (lambda (f) (false-if-exception (make-file-writable f)))
                    (find-files exec-dir "." #:directories? #t))
+                  (with-output-to-file
+                    (string-append exec-dir "/Vreplicant_tb_top__ALL.a")
+                    (lambda () (display "")))
+                  (with-output-to-file
+                    (string-append exec-dir "/Vreplicant_tb_top.mk")
+                    (lambda () (display "# stub\n")))
+                  (with-output-to-file
+                    (string-append exec-dir "/bsg_manycore_simulator.o")
+                    (lambda () (display "")))
                   ;; Copy .so files preserving tree layout
                   (for-each
                    (lambda (f)
