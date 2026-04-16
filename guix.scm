@@ -197,6 +197,36 @@ infrastructure for the BSG Manycore processor used in HammerBlade.")
       (file-name "basejump-stl-checkout")
       (sha256 (base32 "187zwc4z5rbpfddssn84xp7bv2akwz8nz4vkzka7vils16gpq219")))))
 
+;; Source-only packages so users can access these via `guix shell`
+;; (for example, to build their own SPMD kernels outside bsg_bladerunner).
+(define-public bsg-replicant
+  (package
+    (name "bsg-replicant")
+    (version "0.0.0-0.83e2441")
+    (source bsg-replicant-source)
+    (build-system copy-build-system)
+    (arguments
+     (list #:install-plan #~'(("." "share/bsg-replicant"))))
+    (home-page "https://github.com/bespoke-silicon-group/bsg_replicant")
+    (synopsis "HammerBlade host driver + simulation harness source tree")
+    (description "Source tree for bsg_replicant: host-side libraries,
+simulation platforms, and SPMD example infrastructure.")
+    (license license:bsd-3)))
+
+(define-public basejump-stl
+  (package
+    (name "basejump-stl")
+    (version "0.0.0-0.5c66f9d")
+    (source basejump-stl-source)
+    (build-system copy-build-system)
+    (arguments
+     (list #:install-plan #~'(("." "share/basejump-stl"))))
+    (home-page "https://github.com/bespoke-silicon-group/basejump_stl")
+    (synopsis "BaseJump STL standard library + DRAMSim3 for HammerBlade")
+    (description "SystemVerilog standard library (FIFOs, muxes, caches,
+etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
+    (license license:bsd-3)))
+
 ;; Shared helper: set up the BSG build tree from packages.
 ;; Returns an alist of (name . path) for use by callers.
 (define %hammerblade-setup-phase
