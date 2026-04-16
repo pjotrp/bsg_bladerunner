@@ -749,7 +749,9 @@ packages like hammerblade-hello use this as an input.")
                 (substitute* (string-append manycore
                   "/software/mk/Makefile.builddefs")
                   (("-march=\\$\\(ARCH_OP\\) -static")
-                   "-march=$(ARCH_OP) -mabi=ilp32f -static")
+                   ;; -fno-inline-functions: keep code size close to GCC 9.2
+                   ;; (GCC 14 is more aggressive with fn inlining, hurts icache)
+                   "-march=$(ARCH_OP) -mabi=ilp32f -fno-inline-functions -static")
                   (("-mtune=bsg_vanilla_2020") "")
                   ;; Add newlib lib path to link opts
                   (("RISCV_LINK_OPTS \\+= -march=\\$\\(ARCH_OP\\)")
@@ -915,7 +917,7 @@ example using Verilator simulation.")
                   (substitute* (string-append manycore
                     "/software/mk/Makefile.builddefs")
                     (("-march=\\$\\(ARCH_OP\\) -static")
-                     "-march=$(ARCH_OP) -mabi=ilp32f -static")
+                     "-march=$(ARCH_OP) -mabi=ilp32f -fno-inline-functions -static")
                     (("-mtune=bsg_vanilla_2020") "")
                     (("RISCV_LINK_OPTS \\+= -march=\\$\\(ARCH_OP\\)")
                      (string-append "RISCV_LINK_OPTS += -march=$(ARCH_OP) -mabi=ilp32f"
