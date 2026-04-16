@@ -1,11 +1,14 @@
 diff -ruN a/gcc/config/riscv/bsg_vanilla_2020.md b/gcc/config/riscv/bsg_vanilla_2020.md
 --- a/gcc/config/riscv/bsg_vanilla_2020.md	1970-01-01 00:00:00.000000000 +0000
-+++ b/gcc/config/riscv/bsg_vanilla_2020.md	2026-04-15 18:45:09.701730845 +0000
-@@ -0,0 +1,90 @@
++++ b/gcc/config/riscv/bsg_vanilla_2020.md	2026-04-16 15:56:59.240027016 +0000
+@@ -0,0 +1,102 @@
 +;; Pipeline description for BSG Vanilla 2020 RISC-V manycore.
 +;; Copyright (C) 2020 Free Software Foundation, Inc.
 +;; Contributed by Andrew Waterman (andrew@sifive.com) and
 +;; Tommy Jung (BSG, University of Washington).
++;;
++;; Updated for GCC 14 by including all instruction types required by
++;; the riscv_sched_variable_issue assertion check.
 +
 +;; This file is part of GCC.
 +
@@ -28,73 +31,82 @@ diff -ruN a/gcc/config/riscv/bsg_vanilla_2020.md b/gcc/config/riscv/bsg_vanilla_
 +(define_cpu_unit "bsg_vanilla_2020_idiv" "bsg_vanilla_2020")
 +(define_cpu_unit "bsg_vanilla_2020_fdiv" "bsg_vanilla_2020")
 +
-+(define_insn_reservation "bsg_vanilla_2020_int" 1
++;; ALU ops: integer arithmetic, logical, shifts, bitmanip, etc (1 cycle)
++(define_insn_reservation "bsg_vanilla_2020_alu" 1
 +  (and (eq_attr "tune" "bsg_vanilla_2020")
-+       (eq_attr "type" "unknown,const,arith,shift,slt,multi,auipc,nop,logical,move"))
++       (eq_attr "type" "unknown,const,arith,shift,slt,multi,auipc,nop,logical,\
++                        move,bitmanip,min,max,minu,maxu,clz,ctz,rotate,atomic,\
++                        condmove,crypto,mvpair,zicond,trap"))
 +  "bsg_vanilla_2020_alu")
 +
++;; Integer load (2 cycles, worst case for local)
 +(define_insn_reservation "bsg_vanilla_2020_load" 2
 +  (and (eq_attr "tune" "bsg_vanilla_2020")
 +       (eq_attr "type" "load"))
 +  "bsg_vanilla_2020_alu")
 +
++;; FP load (3 cycles)
 +(define_insn_reservation "bsg_vanilla_2020_fpload" 3
 +  (and (eq_attr "tune" "bsg_vanilla_2020")
 +       (eq_attr "type" "fpload"))
 +  "bsg_vanilla_2020_alu")
 +
++;; Store (1 cycle)
 +(define_insn_reservation "bsg_vanilla_2020_store" 1
 +  (and (eq_attr "tune" "bsg_vanilla_2020")
 +       (eq_attr "type" "store,fpstore"))
 +  "bsg_vanilla_2020_alu")
 +
++;; Branches (1 cycle)
 +(define_insn_reservation "bsg_vanilla_2020_branch" 1
 +  (and (eq_attr "tune" "bsg_vanilla_2020")
-+       (eq_attr "type" "branch,jump,call"))
++       (eq_attr "type" "branch,jump,call,jalr,ret"))
 +  "bsg_vanilla_2020_alu")
 +
++;; Short forward branches (2 cycles)
++(define_insn_reservation "bsg_vanilla_2020_sfb_alu" 2
++  (and (eq_attr "tune" "bsg_vanilla_2020")
++       (eq_attr "type" "sfb_alu"))
++  "bsg_vanilla_2020_alu")
++
++;; Integer divide (34 cycles, occupies idiv unit for 33 cycles)
 +(define_insn_reservation "bsg_vanilla_2020_idiv" 34
 +  (and (eq_attr "tune" "bsg_vanilla_2020")
 +       (eq_attr "type" "idiv"))
 +  "bsg_vanilla_2020_alu,bsg_vanilla_2020_idiv*33")
 +
++;; Integer multiply (2 cycles)
 +(define_insn_reservation "bsg_vanilla_2020_imul" 2
 +  (and (eq_attr "tune" "bsg_vanilla_2020")
-+       (eq_attr "type" "imul"))
++       (eq_attr "type" "imul,clmul,cpop"))
 +  "bsg_vanilla_2020_alu")
 +
-+(define_insn_reservation "bsg_vanilla_2020_i2f" 3
++;; FP<->int transfer and compare (3 cycles)
++(define_insn_reservation "bsg_vanilla_2020_xfer" 3
 +  (and (eq_attr "tune" "bsg_vanilla_2020")
-+       (eq_attr "type" "mtc"))
++       (eq_attr "type" "mtc,mfc,fcvt,fcvt_i2f,fcvt_f2i,fmove,fcmp"))
 +  "bsg_vanilla_2020_alu")
 +
-+(define_insn_reservation "bsg_vanilla_2020_f2i" 1
-+  (and (eq_attr "tune" "bsg_vanilla_2020")
-+       (eq_attr "type" "mfc"))
-+  "bsg_vanilla_2020_alu")
-+
++;; FP add/mul/fmadd (3 cycles)
 +(define_insn_reservation "bsg_vanilla_2020_fpu_float" 3
 +  (and (eq_attr "tune" "bsg_vanilla_2020")
 +       (eq_attr "type" "fadd,fmul,fmadd"))
 +  "bsg_vanilla_2020_alu")
 +
-+(define_insn_reservation "bsg_vanilla_2020_fcmp" 1
-+  (and (eq_attr "tune" "bsg_vanilla_2020")
-+       (eq_attr "type" "fcmp"))
-+  "bsg_vanilla_2020_alu")
-+
-+(define_insn_reservation "bsg_vanilla_2020_fmove" 3
-+  (and (eq_attr "tune" "bsg_vanilla_2020")
-+       (eq_attr "type" "fmove"))
-+  "bsg_vanilla_2020_alu")
-+
++;; FP divide/sqrt (26 cycles, occupies fdiv unit for 25 cycles)
 +(define_insn_reservation "bsg_vanilla_2020_fdiv" 26
 +  (and (eq_attr "tune" "bsg_vanilla_2020")
 +       (eq_attr "type" "fdiv,fsqrt"))
 +  "bsg_vanilla_2020_alu,bsg_vanilla_2020_fdiv*25")
++
++;; Ghost (blockage) - 0 cycles
++(define_insn_reservation "bsg_vanilla_2020_ghost" 0
++  (and (eq_attr "tune" "bsg_vanilla_2020")
++       (eq_attr "type" "ghost"))
++  "nothing")
 diff -ruN a/gcc/config/riscv/riscv-cores.def b/gcc/config/riscv/riscv-cores.def
---- a/gcc/config/riscv/riscv-cores.def	2026-04-15 18:45:09.693730807 +0000
-+++ b/gcc/config/riscv/riscv-cores.def	2026-04-15 18:45:09.709730886 +0000
+--- a/gcc/config/riscv/riscv-cores.def	2025-05-23 11:02:04.440199854 +0000
++++ b/gcc/config/riscv/riscv-cores.def	2026-04-16 15:56:59.248027063 +0000
 @@ -42,6 +42,7 @@
  RISCV_TUNE("thead-c906", generic, thead_c906_tune_info)
  RISCV_TUNE("xiangshan-nanhu", xiangshan, xiangshan_nanhu_tune_info)
@@ -104,8 +116,8 @@ diff -ruN a/gcc/config/riscv/riscv-cores.def b/gcc/config/riscv/riscv-cores.def
  
  #undef RISCV_TUNE
 diff -ruN a/gcc/config/riscv/riscv-opts.h b/gcc/config/riscv/riscv-opts.h
---- a/gcc/config/riscv/riscv-opts.h	2026-04-15 18:45:09.697730826 +0000
-+++ b/gcc/config/riscv/riscv-opts.h	2026-04-15 18:45:09.705730867 +0000
+--- a/gcc/config/riscv/riscv-opts.h	2025-05-23 11:02:04.440199854 +0000
++++ b/gcc/config/riscv/riscv-opts.h	2026-04-16 15:56:59.240027016 +0000
 @@ -58,7 +58,8 @@
    sifive_p400,
    sifive_p600,
@@ -117,8 +129,8 @@ diff -ruN a/gcc/config/riscv/riscv-opts.h b/gcc/config/riscv/riscv-opts.h
  extern enum riscv_microarchitecture_type riscv_microarchitecture;
  
 diff -ruN a/gcc/config/riscv/riscv.cc b/gcc/config/riscv/riscv.cc
---- a/gcc/config/riscv/riscv.cc	2026-04-15 18:45:09.693730807 +0000
-+++ b/gcc/config/riscv/riscv.cc	2026-04-15 18:45:09.709730886 +0000
+--- a/gcc/config/riscv/riscv.cc	2025-05-23 11:02:04.444199918 +0000
++++ b/gcc/config/riscv/riscv.cc	2026-04-16 15:56:59.244027039 +0000
 @@ -533,6 +533,24 @@
  };
  
@@ -145,8 +157,8 @@ diff -ruN a/gcc/config/riscv/riscv.cc b/gcc/config/riscv/riscv.cc
    {COSTS_N_INSNS (1), COSTS_N_INSNS (1)},	/* fp_add */
    {COSTS_N_INSNS (1), COSTS_N_INSNS (1)},	/* fp_mul */
 diff -ruN a/gcc/config/riscv/riscv.md b/gcc/config/riscv/riscv.md
---- a/gcc/config/riscv/riscv.md	2026-04-15 18:45:09.697730826 +0000
-+++ b/gcc/config/riscv/riscv.md	2026-04-15 18:45:09.713730905 +0000
+--- a/gcc/config/riscv/riscv.md	2025-05-23 11:02:04.444199918 +0000
++++ b/gcc/config/riscv/riscv.md	2026-04-16 15:56:59.252027086 +0000
 @@ -639,7 +639,7 @@
  ;; Microarchitectures we know how to tune for.
  ;; Keep this in sync with enum riscv_microarchitecture.

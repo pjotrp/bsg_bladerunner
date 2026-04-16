@@ -153,11 +153,16 @@ The patch touches 5 files in `gcc/config/riscv/`:
 - `riscv-cores.def` -- registers the tuning
 - `riscv.md` -- tune attr + include
 
-**Status:** The `-mtune=bsg_vanilla_2020` flag is accepted by the
-patched GCC, but triggers an ICE in GCC 14's scheduler when compiling
-real code (the pipeline model needs updates for GCC 14's changed
-scheduler internals).  The flag is currently disabled in
-`hammerblade-hello`/`hammerblade-examples` builds.
+**Status:** `-mtune=bsg_vanilla_2020` is working and enabled in
+`hammerblade-hello`/`hammerblade-examples` builds.  The initial patch
+only covered the instruction types present in GCC 9.2; GCC 14 added
+many new types (bitmanip, rotate, atomic, condmove, fcvt_i2f, etc.)
+and its scheduler asserts every instruction has a DFA reservation
+(`riscv_sched_variable_issue` calls `gcc_assert
+(insn_has_dfa_reservation_p (insn))`).  The updated patch adds full
+coverage following the pattern from `generic.md`, including all the
+new types as 1-cycle ALU operations.  Result: ~0.7% speedup on hello
+vs generic tuning.
 
 ## Package 4: riscv32-elf-newlib
 

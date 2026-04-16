@@ -489,18 +489,15 @@ packages like hammerblade-hello use this as an input.")
                 (symlink tc-dir
                          (string-append manycore
                            "/software/riscv-tools/riscv-install"))
-                ;; Patch Makefile.builddefs to drop -mtune=bsg_vanilla_2020
-                ;; Add -mabi=ilp32f (GCC 14 defaults to ilp32d) and
-                ;; remove -mtune=bsg_vanilla_2020 (triggers ICE in GCC 14
-                ;; scheduler; the pipeline model needs updates for GCC 14)
+                ;; Patch Makefile.builddefs for GCC 14 compatibility.
+                ;; Add -mabi=ilp32f (GCC 14 defaults to ilp32d).
+                ;; Add -fno-inline-functions to keep code size close to GCC 9.2
+                ;; (GCC 14 is more aggressive with fn inlining, hurts icache).
+                ;; Keep -mtune=bsg_vanilla_2020 (supported by our patched gcc).
                 (substitute* (string-append manycore
                   "/software/mk/Makefile.builddefs")
                   (("-march=\\$\\(ARCH_OP\\) -static")
-                   ;; -fno-inline-functions: keep code size close to GCC 9.2
-                   ;; (GCC 14 is more aggressive with fn inlining, hurts icache)
                    "-march=$(ARCH_OP) -mabi=ilp32f -fno-inline-functions -static")
-                  (("-mtune=bsg_vanilla_2020") "")
-                  ;; Add newlib lib path to link opts
                   (("RISCV_LINK_OPTS \\+= -march=\\$\\(ARCH_OP\\)")
                    (string-append "RISCV_LINK_OPTS += -march=$(ARCH_OP) -mabi=ilp32f"
                      " -L" newlib "/riscv32-elf/lib")))
@@ -673,11 +670,11 @@ example using Verilator simulation.")
                            (string-append manycore
                              "/software/riscv-tools/riscv-install"))
                   ;; Patch build defs for GCC 14 compatibility
+                  ;; (keep -mtune=bsg_vanilla_2020 -- our patched gcc supports it)
                   (substitute* (string-append manycore
                     "/software/mk/Makefile.builddefs")
                     (("-march=\\$\\(ARCH_OP\\) -static")
                      "-march=$(ARCH_OP) -mabi=ilp32f -fno-inline-functions -static")
-                    (("-mtune=bsg_vanilla_2020") "")
                     (("RISCV_LINK_OPTS \\+= -march=\\$\\(ARCH_OP\\)")
                      (string-append "RISCV_LINK_OPTS += -march=$(ARCH_OP) -mabi=ilp32f"
                        " -L" newlib "/riscv32-elf/lib")))
@@ -771,9 +768,9 @@ example using Verilator simulation.")
                 (let* ((srcdir (getcwd))
                        (replicant (string-append srcdir "/bsg_replicant"))
                        (manycore (string-append srcdir "/bsg_manycore"))
-                       ;; Baseline cycle counts from the confirmed-working
-                       ;; riscv32-elf-gcc-bsg + -fno-inline-functions build
-                       (baselines '(("hello"            . 4060602)
+                       ;; Baseline cycle counts from riscv32-elf-gcc-bsg with
+                       ;; -mtune=bsg_vanilla_2020 + -fno-inline-functions
+                       (baselines '(("hello"            . 4033962)
                                     ("bsg_scalar_print" . 747918)
                                     ("fib"              . 866466)
                                     ("mul_div"          . 966366)))
