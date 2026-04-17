@@ -322,8 +322,8 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
                      (machine-path (string-append replicant
                        "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
                      (dest (string-append out "/share/hammerblade-sim")))
-                ;; Install only simsc binary (~65 MB).  The ~1.5 GB of
-                ;; verilator .cpp/.o/.a/.mk files are not needed:
+                ;; Install only simsc binary.  The verilator
+                ;; .cpp/.o/.a/.mk files are not needed:
                 ;; downstream patches link.mk to skip verilator/compile/
                 ;; link entirely; make sees pre-built simsc as the target.
                 (mkdir-p (string-append dest "/exec"))
@@ -353,8 +353,8 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
     (home-page "https://github.com/bespoke-silicon-group/bsg_bladerunner")
     (synopsis "HammerBlade verilated simulation platform")
     (description "Verilated simulation binary (simsc) and platform shared
-libraries for the HammerBlade manycore.  This is the slow build (~78 min)
-that compiles ~600 C++ files from the verilated RTL model.  Example
+libraries for the HammerBlade manycore.  This is the slow build (~18 min
+with Verilator 5) that compiles the verilated RTL model.  Example
 packages like hammerblade-hello use this as an input.")
     (license license:bsd-3))))
 
@@ -857,7 +857,7 @@ example using Verilator simulation.")
                    examples))))))))
     (synopsis "HammerBlade manycore SPMD examples")
     (description "Builds and runs multiple HammerBlade manycore SPMD examples
-using Verilator simulation.  The verilated model is built once (~78 min) and
+using Verilator simulation.  The verilated model is built once (~18 min) and
 reused across all examples.  Includes: hello, bsg_scalar_print, fib, mul_div.
 Some examples are patched to reduce iteration counts for faster simulation.")))
 
