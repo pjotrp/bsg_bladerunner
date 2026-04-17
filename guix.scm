@@ -327,6 +327,99 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
          (lambda (f) (false-if-exception (delete-file f)))
          (find-files replicant "\\.so(\\..*)?$")))))
 
+;; Shared helper for SPMD example packages: sets up the full build
+;; environment (BSG tree, toolchain, pre-built sim, patched makefiles,
+;; DRAMSim3 symlink, LD_LIBRARY_PATH).  Returns an alist of key paths.
+(define %hammerblade-spmd-setup
+  #~(lambda* (#:key inputs #:allow-other-keys)
+      (use-modules (ice-9 popen) (ice-9 rdelim) (ice-9 ftw))
+      ;; Base BSG tree setup (git init, env vars, verilator root)
+      (#$%hammerblade-setup-phase #:inputs inputs)
+      (let* ((sim (assoc-ref inputs "hammerblade-sim"))
+             (sim-dir (string-append sim "/share/hammerblade-sim"))
+             (tc-dir (assoc-ref inputs "bsg-riscv-toolchain"))
+             (newlib (assoc-ref inputs "riscv32-elf-newlib"))
+             (srcdir (getcwd))
+             (replicant (string-append srcdir "/bsg_replicant"))
+             (manycore (string-append srcdir "/bsg_manycore"))
+             (machine-path (string-append replicant
+               "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
+             (exec-dir (string-append machine-path
+                         "/bigblade-verilator/exec"))
+             (link-mk (string-append replicant
+               "/libraries/platforms/bigblade-verilator/link.mk")))
+        ;; Toolchain
+        (setenv "RISCV" tc-dir)
+        (setenv "PATH"
+          (string-append tc-dir "/bin:"
+                         (assoc-ref inputs "verilator") "/bin:"
+                         (getenv "PATH")))
+        (mkdir-p (string-append manycore "/software/riscv-tools"))
+        (symlink tc-dir
+                 (string-append manycore "/software/riscv-tools/riscv-install"))
+        ;; Patch Makefile.builddefs for GCC 14 (ilp32f, no-inline)
+        (substitute* (string-append manycore "/software/mk/Makefile.builddefs")
+          (("-march=\\$\\(ARCH_OP\\) -static")
+           "-march=$(ARCH_OP) -mabi=ilp32f -fno-inline-functions -static")
+          (("RISCV_LINK_OPTS \\+= -march=\\$\\(ARCH_OP\\)")
+           (string-append "RISCV_LINK_OPTS += -march=$(ARCH_OP) -mabi=ilp32f"
+             " -L" newlib "/riscv32-elf/lib")))
+        ;; Copy pre-built simsc + create make dependency stubs
+        (copy-recursively (string-append sim-dir "/exec") exec-dir)
+        (for-each
+         (lambda (f) (false-if-exception (make-file-writable f)))
+         (find-files exec-dir "." #:directories? #t))
+        (for-each
+         (lambda (name)
+           (with-output-to-file (string-append exec-dir "/" name)
+             (lambda () (display (if (string-suffix? ".mk" name) "# stub\n" "")))))
+         '("Vreplicant_tb_top__ALL.a" "Vreplicant_tb_top.mk"
+           "bsg_manycore_simulator.o"))
+        ;; Copy .so files preserving tree layout
+        (for-each
+         (lambda (f)
+           (let ((dest (string-append replicant
+                         (string-drop f (string-length sim-dir)))))
+             (mkdir-p (dirname dest))
+             (copy-file f dest)))
+         (find-files (string-append sim-dir "/libraries") "\\.so$"))
+        ;; Patch link.mk to skip verilator/compile/link
+        (substitute* link-mk
+          (("@\\$\\(VERILATOR\\) -Mdir")
+           "@echo 'skipping verilator (pre-built)' # $(VERILATOR) -Mdir")
+          (("\\$\\(MAKE\\) OPT_FAST=\"-O2 -march=native\" -C \\$\\(dir \\$@\\) -f \\$\\(notdir \\$<\\) default")
+           "echo 'skipping C++ compile (pre-built)'")
+          (("\\$\\(LD\\) -o \\$@ \\$\\(LDFLAGS\\) \\$\\^")
+           "echo 'skipping link (pre-built)'")
+          (("\\$\\(CXX\\) -c \\$\\(CXXFLAGS\\) -I\\$\\(dir \\$@\\) \\$\\^ -o \\$@")
+           "echo 'skipping simulator.o compile (pre-built)'"))
+        ;; DRAMSim3 config path symlink
+        (let* ((dramsim-so
+                (car (find-files
+                      (string-append replicant "/libraries")
+                      "libdramsim3\\.so$")))
+               (pipe (open-pipe*
+                       OPEN_READ "grep" "-ao"
+                       "/tmp/guix-build-hammerblade-sim[^[:space:]]*/source"
+                       dramsim-so))
+               (sim-source (read-line pipe)))
+          (close-pipe pipe)
+          (when (and (string? sim-source)
+                     (string-prefix? "/tmp/" sim-source))
+            (mkdir-p sim-source)
+            (symlink (string-append srcdir "/basejump_stl")
+                     (string-append sim-source "/basejump_stl"))))
+        ;; LD_LIBRARY_PATH for simsc
+        (setenv "LD_LIBRARY_PATH"
+          (string-join
+           (map dirname
+             (find-files (string-append replicant "/libraries") "\\.so$"))
+           ":"))
+        ;; Return key paths
+        `((replicant . ,replicant)
+          (manycore . ,manycore)
+          (machine-path . ,machine-path)))))
+
 (define-public hammerblade-sim
   (let ((commit "8100e9726654a00f11b40b9cf4a2c9a510f77dbb")
         (revision "0"))
@@ -482,112 +575,15 @@ packages like hammerblade-hello use this as an input.")
                      (cons #$basejump-stl-source "basejump_stl")))))
           (replace 'build
             (lambda* (#:key inputs #:allow-other-keys)
-              ;; Set up the BSG build tree
-              (#$%hammerblade-setup-phase #:inputs inputs)
-              (let* ((sim (assoc-ref inputs "hammerblade-sim"))
-                     (sim-dir (string-append sim "/share/hammerblade-sim"))
-                     (tc-dir (assoc-ref inputs "bsg-riscv-toolchain"))
-                     (newlib (assoc-ref inputs "riscv32-elf-newlib"))
-                     (srcdir (getcwd))
-                     (replicant (string-append srcdir "/bsg_replicant"))
-                     (manycore (string-append srcdir "/bsg_manycore"))
-                     (machine-path (string-append replicant
-                       "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
-                     (exec-dir (string-append machine-path
-                                 "/bigblade-verilator/exec"))
-                     (link-mk (string-append replicant
-                       "/libraries/platforms/bigblade-verilator/link.mk")))
-                (setenv "RISCV" tc-dir)
-                (setenv "PATH"
-                  (string-append tc-dir "/bin:"
-                                 (assoc-ref inputs "verilator") "/bin:"
-                                 (getenv "PATH")))
-                ;; Symlink RISC-V toolchain to expected location
-                (mkdir-p (string-append manycore "/software/riscv-tools"))
-                (symlink tc-dir
-                         (string-append manycore
-                           "/software/riscv-tools/riscv-install"))
-                ;; Patch Makefile.builddefs for GCC 14 compatibility.
-                ;; Add -mabi=ilp32f (GCC 14 defaults to ilp32d).
-                ;; Add -fno-inline-functions to keep code size close to GCC 9.2
-                ;; (GCC 14 is more aggressive with fn inlining, hurts icache).
-                ;; Keep -mtune=bsg_vanilla_2020 (supported by our patched gcc).
-                (substitute* (string-append manycore
-                  "/software/mk/Makefile.builddefs")
-                  (("-march=\\$\\(ARCH_OP\\) -static")
-                   "-march=$(ARCH_OP) -mabi=ilp32f -fno-inline-functions -static")
-                  (("RISCV_LINK_OPTS \\+= -march=\\$\\(ARCH_OP\\)")
-                   (string-append "RISCV_LINK_OPTS += -march=$(ARCH_OP) -mabi=ilp32f"
-                     " -L" newlib "/riscv32-elf/lib")))
-                ;; Copy pre-built simsc from hammerblade-sim and create
-                ;; empty stubs for .a and .mk (make dependencies)
-                (copy-recursively (string-append sim-dir "/exec") exec-dir)
-                (for-each
-                 (lambda (f) (false-if-exception (make-file-writable f)))
-                 (find-files exec-dir "." #:directories? #t))
-                (with-output-to-file
-                  (string-append exec-dir "/Vreplicant_tb_top__ALL.a")
-                  (lambda () (display "")))
-                (with-output-to-file
-                  (string-append exec-dir "/Vreplicant_tb_top.mk")
-                  (lambda () (display "# stub\n")))
-                (with-output-to-file
-                  (string-append exec-dir "/bsg_manycore_simulator.o")
-                  (lambda () (display "")))
-                ;; Copy .so files preserving tree layout
-                (for-each
-                 (lambda (f)
-                   (let ((dest (string-append replicant
-                                 (string-drop f (string-length sim-dir)))))
-                     (mkdir-p (dirname dest))
-                     (copy-file f dest)))
-                 (find-files (string-append sim-dir "/libraries")
-                             "\\.so$"))
-                ;; Patch link.mk to skip verilator and C++ compilation.
-                ;; Replace the FRAGS recipe (verilator), LIBS recipe
-                ;; (C++ compile), and SIMSCS recipe (link) with no-ops.
-                ;; The pre-built simsc is already in place.
-                (substitute* link-mk
-                  (("@\\$\\(VERILATOR\\) -Mdir")
-                   "@echo 'skipping verilator (pre-built)' # $(VERILATOR) -Mdir")
-                  (("\\$\\(MAKE\\) OPT_FAST=\"-O2 -march=native\" -C \\$\\(dir \\$@\\) -f \\$\\(notdir \\$<\\) default")
-                   "echo 'skipping C++ compile (pre-built)'")
-                  (("\\$\\(LD\\) -o \\$@ \\$\\(LDFLAGS\\) \\$\\^")
-                   "echo 'skipping link (pre-built)'")
-                  (("\\$\\(CXX\\) -c \\$\\(CXXFLAGS\\) -I\\$\\(dir \\$@\\) \\$\\^ -o \\$@")
-                   "echo 'skipping simulator.o compile (pre-built)'"))
+              (let* ((env (#$%hammerblade-spmd-setup #:inputs inputs))
+                     (replicant (assq-ref env 'replicant))
+                     (manycore (assq-ref env 'manycore))
+                     (machine-path (assq-ref env 'machine-path)))
                 ;; Clean pre-built kernel artifacts
                 (for-each
                  (lambda (f) (false-if-exception (delete-file f)))
                  (find-files (string-append manycore "/software/spmd/hello")
                              "\\.(o|riscv|a|ld)$"))
-                ;; Create symlink for DRAMSim3 config path hardcoded
-                ;; in libdramsim3.so from the hammerblade-sim build.
-                ;; Find the sim build path in the .so binary and create
-                ;; the expected directory structure.
-                ;; Use grep to extract the sim build path from the .so
-                (let* ((dramsim-so
-                        (car (find-files
-                              (string-append replicant "/libraries")
-                              "libdramsim3\\.so$")))
-                       (pipe (open-pipe*
-                               OPEN_READ "grep" "-ao"
-                               "/tmp/guix-build-hammerblade-sim[^[:space:]]*/source"
-                               dramsim-so))
-                       (sim-source (read-line pipe)))
-                  (close-pipe pipe)
-                  (when (and (string? sim-source)
-                             (string-prefix? "/tmp/" sim-source))
-                    (mkdir-p sim-source)
-                    (symlink (string-append srcdir "/basejump_stl")
-                             (string-append sim-source "/basejump_stl"))))
-                ;; Set LD_LIBRARY_PATH so simsc finds its .so files
-                (setenv "LD_LIBRARY_PATH"
-                  (string-join
-                   (map dirname
-                     (find-files (string-append replicant "/libraries")
-                                 "\\.so$"))
-                   ":"))
                 ;; Build hello (kernel + host only, simsc is pre-built)
                 (with-directory-excursion
                     (string-append replicant "/examples/spmd/hello")
@@ -624,96 +620,12 @@ example using Verilator simulation.")
         #~(modify-phases #$phases
             (replace 'build
               (lambda* (#:key inputs #:allow-other-keys)
-                ;; Set up the BSG build tree (from hammerblade-hello)
-                (#$%hammerblade-setup-phase #:inputs inputs)
-                (let* ((sim (assoc-ref inputs "hammerblade-sim"))
-                       (sim-dir (string-append sim "/share/hammerblade-sim"))
-                       (tc-dir (assoc-ref inputs "bsg-riscv-toolchain"))
-                       (newlib (assoc-ref inputs "riscv32-elf-newlib"))
-                       (srcdir (getcwd))
-                       (replicant (string-append srcdir "/bsg_replicant"))
-                       (manycore (string-append srcdir "/bsg_manycore"))
-                       (machine-path (string-append replicant
-                         "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
-                       (exec-dir (string-append machine-path
-                                   "/bigblade-verilator/exec"))
-                       (link-mk (string-append replicant
-                         "/libraries/platforms/bigblade-verilator/link.mk"))
+                (let* ((env (#$%hammerblade-spmd-setup #:inputs inputs))
+                       (replicant (assq-ref env 'replicant))
+                       (manycore (assq-ref env 'manycore))
+                       (machine-path (assq-ref env 'machine-path))
                        (examples '("hello" "bsg_scalar_print"
                                    "fib" "mul_div")))
-                  (setenv "RISCV" tc-dir)
-                  (setenv "PATH"
-                    (string-append tc-dir "/bin:"
-                                   (assoc-ref inputs "verilator") "/bin:"
-                                   (getenv "PATH")))
-                  ;; Symlink RISC-V toolchain to expected location
-                  (mkdir-p (string-append manycore "/software/riscv-tools"))
-                  (symlink tc-dir
-                           (string-append manycore
-                             "/software/riscv-tools/riscv-install"))
-                  ;; Patch build defs for GCC 14 compatibility
-                  ;; (keep -mtune=bsg_vanilla_2020 -- our patched gcc supports it)
-                  (substitute* (string-append manycore
-                    "/software/mk/Makefile.builddefs")
-                    (("-march=\\$\\(ARCH_OP\\) -static")
-                     "-march=$(ARCH_OP) -mabi=ilp32f -fno-inline-functions -static")
-                    (("RISCV_LINK_OPTS \\+= -march=\\$\\(ARCH_OP\\)")
-                     (string-append "RISCV_LINK_OPTS += -march=$(ARCH_OP) -mabi=ilp32f"
-                       " -L" newlib "/riscv32-elf/lib")))
-                  ;; Copy pre-built simsc and create make dep stubs
-                  (copy-recursively (string-append sim-dir "/exec") exec-dir)
-                  (for-each
-                   (lambda (f) (false-if-exception (make-file-writable f)))
-                   (find-files exec-dir "." #:directories? #t))
-                  (with-output-to-file
-                    (string-append exec-dir "/Vreplicant_tb_top__ALL.a")
-                    (lambda () (display "")))
-                  (with-output-to-file
-                    (string-append exec-dir "/Vreplicant_tb_top.mk")
-                    (lambda () (display "# stub\n")))
-                  (with-output-to-file
-                    (string-append exec-dir "/bsg_manycore_simulator.o")
-                    (lambda () (display "")))
-                  ;; Copy .so files preserving tree layout
-                  (for-each
-                   (lambda (f)
-                     (let ((dest (string-append replicant
-                                   (string-drop f (string-length sim-dir)))))
-                       (mkdir-p (dirname dest))
-                       (copy-file f dest)))
-                   (find-files (string-append sim-dir "/libraries")
-                               "\\.so$"))
-                  ;; Patch link.mk to skip verilator/compile/link
-                  (substitute* link-mk
-                    (("@\\$\\(VERILATOR\\) -Mdir")
-                     "@echo 'skipping verilator' # $(VERILATOR) -Mdir")
-                    (("\\$\\(MAKE\\) OPT_FAST=\"-O2 -march=native\" -C \\$\\(dir \\$@\\) -f \\$\\(notdir \\$<\\) default")
-                     "echo 'skipping C++ compile'")
-                    (("\\$\\(LD\\) -o \\$@ \\$\\(LDFLAGS\\) \\$\\^")
-                     "echo 'skipping link'"))
-                  ;; Create symlink for DRAMSim3 config path
-                  (let* ((dramsim-so
-                          (car (find-files
-                                (string-append replicant "/libraries")
-                                "libdramsim3\\.so$")))
-                         (pipe (open-pipe*
-                                 OPEN_READ "grep" "-ao"
-                                 "/tmp/guix-build-hammerblade-sim[^[:space:]]*/source"
-                                 dramsim-so))
-                         (sim-source (read-line pipe)))
-                    (close-pipe pipe)
-                    (when (and (string? sim-source)
-                               (string-prefix? "/tmp/" sim-source))
-                      (mkdir-p sim-source)
-                      (symlink (string-append srcdir "/basejump_stl")
-                               (string-append sim-source "/basejump_stl"))))
-                  ;; Set LD_LIBRARY_PATH
-                  (setenv "LD_LIBRARY_PATH"
-                    (string-join
-                     (map dirname
-                       (find-files (string-append replicant "/libraries")
-                                   "\\.so$"))
-                     ":"))
                   ;; Patch slow examples for faster simulation
                   (substitute*
                     (string-append manycore "/software/spmd/fib/main.c")
