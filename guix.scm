@@ -447,18 +447,21 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
     (arguments
      (list
       #:tests? #f
+      #:modules '((guix build gnu-build-system)
+                  (guix build utils)
+                  (ice-9 match))
       #:phases
       #~(modify-phases %standard-phases
           (delete 'configure)
           (add-after 'unpack 'populate-submodules
             (lambda _
               (for-each
-               (lambda (pair)
-                 (copy-recursively (car pair) (cdr pair))
-                 (for-each
-                  (lambda (f)
-                    (false-if-exception (make-file-writable f)))
-                  (find-files (cdr pair) "." #:directories? #t)))
+               (match-lambda
+                 ((src . dest)
+                  (copy-recursively src dest)
+                  (for-each
+                   (lambda (f) (false-if-exception (make-file-writable f)))
+                   (find-files dest "." #:directories? #t))))
                (list (cons #$bsg-replicant-source "bsg_replicant")
                      (cons #$basejump-stl-source "basejump_stl")))))
           (replace 'build
@@ -557,6 +560,7 @@ packages like hammerblade-hello use this as an input.")
       #:modules '((guix build gnu-build-system)
                   (guix build utils)
                   (ice-9 ftw)
+                  (ice-9 match)
                   (ice-9 popen)
                   (ice-9 rdelim))
       #:phases
@@ -565,12 +569,12 @@ packages like hammerblade-hello use this as an input.")
           (add-after 'unpack 'populate-submodules
             (lambda _
               (for-each
-               (lambda (pair)
-                 (copy-recursively (car pair) (cdr pair))
-                 (for-each
-                  (lambda (f)
-                    (false-if-exception (make-file-writable f)))
-                  (find-files (cdr pair) "." #:directories? #t)))
+               (match-lambda
+                 ((src . dest)
+                  (copy-recursively src dest)
+                  (for-each
+                   (lambda (f) (false-if-exception (make-file-writable f)))
+                   (find-files dest "." #:directories? #t))))
                (list (cons #$bsg-replicant-source "bsg_replicant")
                      (cons #$basejump-stl-source "basejump_stl")))))
           (replace 'build
