@@ -61,8 +61,8 @@ The Makefiles will warn/fail if it cannot find the appropriate tools.
 
 ### Packages
 
-'''IMPORTANT: we include GUIX.md and guix.scm for building these resources from Guix. Use this for the latest tools and a pleasant
-user experience.'''
+**IMPORTANT: we include [GUIX.md](./GUIX.md) and [guix.scm](./guix.scm) for building these resources from Guix. Use this for the latest tools and a pleasant
+user experience.**
 
 Building the RISC-V Toolchain requires several distribution
 packages. The following are required for CentOS/RHEL-based
