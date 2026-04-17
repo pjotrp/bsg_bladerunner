@@ -18,7 +18,7 @@ All tiles execute the same program on a different set of input data to
 complete a larger computation kernel. Programs are written in the
 CUDA-Lite lanaguage (C/C++) and executed on the tiles in parallel
 "groups", and sequential "grids". The CUDA-Lite host runtime (C/C++)
-manages execution parallel and sequential execution. 
+manages execution parallel and sequential execution.
 
 The HammerBlade is being integrated with higher-level parallel
 frameworks and Domain-Specific Languages. A Pytorch
@@ -29,7 +29,7 @@ being developed to support Graph Computations.
 
 C/C++, Python, and Pytorch programs can interact with a Cooperatively
 Simulated (Cosimulated) HammerBlade Node using Synopysis VCS or
-Verilator. 
+Verilator.
 The HammerBlade Runtime and Cosimulation top levels are in [BSG
 Replicant](https://github.com/bespoke-silicon-group/bsg_replicant)
 repository.
@@ -61,6 +61,9 @@ The Makefiles will warn/fail if it cannot find the appropriate tools.
 
 ### Packages
 
+'''IMPORTANT: we include GUIX.md and guix.scm for building these resources from Guix. Use this for the latest tools and a pleasant
+user experience.'''
+
 Building the RISC-V Toolchain requires several distribution
 packages. The following are required for CentOS/RHEL-based
 distributions:
@@ -76,9 +79,9 @@ On debian-based distributions, the following packages are required:
 
 **Non Bespoke Silicon Group (BSG) users MUST have VCS installed on PATH before these steps**
 
-The default VCS environment simulates the manycore architecture, without any closed-source or encrypted IP. 
+The default VCS environment simulates the manycore architecture, without any closed-source or encrypted IP.
 
-1. [Add SSH Keys to your GitHub account](https://help.github.com/en/github/authenticating-to-github/adding-a-new-ssh-key-to-your-github-account). 
+1. [Add SSH Keys to your GitHub account](https://help.github.com/en/github/authenticating-to-github/adding-a-new-ssh-key-to-your-github-account).
 
 2. Initialize the submodules: `git submodule update --init --recursive`
 
@@ -91,7 +94,7 @@ The default VCS environment simulates the manycore architecture, without any clo
 
 Verilator simulates the HammerBlade architecture using C/C++ transpilation.
 
-1. [Add SSH Keys to your GitHub account](https://help.github.com/en/github/authenticating-to-github/adding-a-new-ssh-key-to-your-github-account). 
+1. [Add SSH Keys to your GitHub account](https://help.github.com/en/github/authenticating-to-github/adding-a-new-ssh-key-to-your-github-account).
 
 2. Initialize the submodules: `git submodule update --init --recursive`
 
@@ -108,8 +111,8 @@ See [bsg_replicant/README.md](bsg_replicant/README.md)
 ## [Makefile](Makefile) targets
 
 * `setup`: Build all tools and updates necessary for cosimulation
-  
-  You can also run `make help` to see all of the available targets in this repository. 
+
+  You can also run `make help` to see all of the available targets in this repository.
 
 ## Repository File List
 

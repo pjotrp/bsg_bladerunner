@@ -1,6 +1,8 @@
 ;; BSG Bladerunner HammerBlade packages for Guix
 ;;
 ;; Build any package by changing the last line, e.g. hammerblade-hello
+;;
+;; See ./GUIX.md for full documentation
 
 (use-modules
   ((guix licenses) #:prefix license:)
@@ -666,4 +668,4 @@ using Verilator simulation.  The verilated model is built once (~18 min) and
 reused across all examples.  Includes: hello, bsg_scalar_print, fib, mul_div.
 Some examples are patched to reduce iteration counts for faster simulation.")))
 
-hammerblade-hello
+hammerblade-examples
