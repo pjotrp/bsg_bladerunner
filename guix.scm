@@ -5,7 +5,7 @@
 (use-modules
   ((guix licenses) #:prefix license:)
   (guix packages) (guix gexp) (guix git-download) (guix utils)
-  (guix build-system copy) (guix build-system gnu)
+  (guix build-system copy) (guix build-system gnu) (guix build-system trivial)
   (gnu packages algebra) (gnu packages autotools) (gnu packages base)
   (gnu packages bison) (gnu packages compression) (gnu packages commencement)
   (gnu packages cross-base)
@@ -103,6 +103,76 @@
     (synopsis "C library for riscv32-elf bare-metal targets")
     (description "Newlib C library cross-compiled for riscv32-elf with
 small reentrant struct, suitable for embedded/manycore targets.")
+    (license license:bsd-3)))
+
+;;;
+;;; Unified BSG RISC-V toolchain directory
+;;; Creates the riscv32-unknown-elf-dramfs-* symlink tree that the BSG
+;;; build system expects, pointing to the Guix cross-gcc/binutils/newlib.
+;;;
+
+(define-public bsg-riscv-toolchain
+  (package
+    (name "bsg-riscv-toolchain")
+    (version "14.3.0")
+    (source #f)
+    (build-system trivial-build-system)
+    (native-inputs
+     (list riscv32-elf-gcc-bsg `(,riscv32-elf-gcc-bsg "lib")
+           riscv32-elf-newlib %riscv32-xbinutils))
+    (arguments
+     (list
+      #:modules '((guix build utils) (ice-9 ftw))
+      #:builder
+      #~(begin
+          (use-modules (guix build utils) (ice-9 ftw))
+          (let* ((xgcc (assoc-ref %build-inputs "riscv32-elf-gcc-bsg"))
+                 (newlib (assoc-ref %build-inputs "riscv32-elf-newlib"))
+                 (xbinutils (assoc-ref %build-inputs "binutils-cross-riscv32-elf"))
+                 (out #$output)
+                 (bin (string-append out "/bin")))
+            (mkdir-p bin)
+            ;; Symlink gcc/g++/cpp
+            (for-each
+             (lambda (tool)
+               (let ((src (string-append xgcc "/bin/riscv32-elf-" tool))
+                     (dst (string-append bin "/riscv32-unknown-elf-dramfs-" tool)))
+                 (when (file-exists? src) (symlink src dst))))
+             '("gcc" "g++" "cpp"))
+            ;; Symlink binutils
+            (for-each
+             (lambda (tool)
+               (let ((src (string-append xbinutils "/bin/riscv32-elf-" tool))
+                     (dst (string-append bin "/riscv32-unknown-elf-dramfs-" tool)))
+                 (when (file-exists? src) (symlink src dst))))
+             '("ar" "as" "ld" "nm" "objcopy" "objdump" "ranlib"
+               "readelf" "size" "strings" "strip"))
+            ;; Set up lib/include dirs so gcc finds newlib + libgcc
+            (let* ((gcc-lib-dir
+                    (let loop ((ins %build-inputs))
+                      (if (null? ins) #f
+                          (let ((dir (string-append (cdar ins)
+                                       "/lib/gcc/riscv32-elf")))
+                            (if (file-exists? dir) (cdar ins)
+                                (loop (cdr ins)))))))
+                   (gcc-ver
+                    (car (scandir
+                      (string-append gcc-lib-dir "/lib/gcc/riscv32-elf")
+                      (lambda (f) (not (member f '("." ".."))))))))
+              (mkdir-p (string-append out "/lib/gcc/riscv32-unknown-elf-dramfs"))
+              (symlink (string-append gcc-lib-dir "/lib/gcc/riscv32-elf/" gcc-ver)
+                (string-append out "/lib/gcc/riscv32-unknown-elf-dramfs/" gcc-ver))
+              (mkdir-p (string-append out "/riscv32-unknown-elf-dramfs"))
+              (symlink (string-append newlib "/riscv32-elf/lib")
+                (string-append out "/riscv32-unknown-elf-dramfs/lib"))
+              (symlink (string-append newlib "/riscv32-elf/include")
+                (string-append out "/riscv32-unknown-elf-dramfs/include")))))))
+    (home-page "https://github.com/bespoke-silicon-group/bsg_bladerunner")
+    (synopsis "BSG RISC-V toolchain wrapper (dramfs prefix symlinks)")
+    (description "Creates a unified toolchain directory with
+riscv32-unknown-elf-dramfs-* symlinks pointing to Guix cross-gcc,
+cross-binutils, and newlib.  The BSG Manycore build system expects
+this naming convention.")
     (license license:bsd-3)))
 
 ;;;
@@ -384,8 +454,7 @@ packages like hammerblade-hello use this as an input.")
     (build-system gnu-build-system)
     (native-inputs
      (list hammerblade-sim verilator bsg-manycore
-           riscv32-elf-gcc-bsg `(,riscv32-elf-gcc-bsg "lib")
-           riscv32-elf-newlib %riscv32-xbinutils
+           bsg-riscv-toolchain riscv32-elf-newlib
            gcc-toolchain-12
            bc git-minimal perl python-wrapper which coreutils))
     (inputs (list zlib))
@@ -417,9 +486,8 @@ packages like hammerblade-hello use this as an input.")
               (#$%hammerblade-setup-phase #:inputs inputs)
               (let* ((sim (assoc-ref inputs "hammerblade-sim"))
                      (sim-dir (string-append sim "/share/hammerblade-sim"))
-                     (xgcc (assoc-ref inputs "riscv32-elf-gcc-bsg"))
+                     (tc-dir (assoc-ref inputs "bsg-riscv-toolchain"))
                      (newlib (assoc-ref inputs "riscv32-elf-newlib"))
-                     (xbinutils (assoc-ref inputs "binutils-cross-riscv32-elf"))
                      (srcdir (getcwd))
                      (replicant (string-append srcdir "/bsg_replicant"))
                      (manycore (string-append srcdir "/bsg_manycore"))
@@ -428,51 +496,7 @@ packages like hammerblade-hello use this as an input.")
                      (exec-dir (string-append machine-path
                                  "/bigblade-verilator/exec"))
                      (link-mk (string-append replicant
-                       "/libraries/platforms/bigblade-verilator/link.mk"))
-                     ;; Create a unified toolchain directory with
-                     ;; riscv32-unknown-elf-dramfs-* symlinks pointing
-                     ;; to riscv32-elf-* binaries (BSG build system
-                     ;; expects the dramfs prefix)
-                     (tc-dir (string-append srcdir "/riscv-toolchain")))
-                (mkdir-p (string-append tc-dir "/bin"))
-                ;; Symlink gcc and g++ with BSG tuning wrapper scripts
-                (for-each
-                 (lambda (tool)
-                   (let ((src (string-append xgcc "/bin/riscv32-elf-" tool))
-                         (dst (string-append tc-dir "/bin/riscv32-unknown-elf-dramfs-" tool)))
-                     (when (file-exists? src)
-                       (symlink src dst))))
-                 '("gcc" "g++" "cpp"))
-                ;; Symlink binutils
-                (for-each
-                 (lambda (tool)
-                   (let ((src (string-append xbinutils "/bin/riscv32-elf-" tool))
-                         (dst (string-append tc-dir "/bin/riscv32-unknown-elf-dramfs-" tool)))
-                     (when (file-exists? src)
-                       (symlink src dst))))
-                 '("ar" "as" "ld" "nm" "objcopy" "objdump" "ranlib"
-                   "readelf" "size" "strings" "strip"))
-                ;; Set up lib/include dirs so gcc finds newlib + libgcc
-                ;; Find the gcc lib output by scanning inputs
-                (let* ((gcc-lib-dir
-                        (let loop ((ins inputs))
-                          (if (null? ins) #f
-                              (let ((dir (string-append (cdar ins)
-                                           "/lib/gcc/riscv32-elf")))
-                                (if (file-exists? dir) (cdar ins)
-                                    (loop (cdr ins)))))))
-                       (gcc-ver
-                        (car (scandir
-                          (string-append gcc-lib-dir "/lib/gcc/riscv32-elf")
-                          (lambda (f) (not (member f '("." ".."))))))))
-                  (mkdir-p (string-append tc-dir "/lib/gcc/riscv32-unknown-elf-dramfs"))
-                  (symlink (string-append gcc-lib-dir "/lib/gcc/riscv32-elf/" gcc-ver)
-                    (string-append tc-dir "/lib/gcc/riscv32-unknown-elf-dramfs/" gcc-ver))
-                  (mkdir-p (string-append tc-dir "/riscv32-unknown-elf-dramfs"))
-                  (symlink (string-append newlib "/riscv32-elf/lib")
-                    (string-append tc-dir "/riscv32-unknown-elf-dramfs/lib"))
-                  (symlink (string-append newlib "/riscv32-elf/include")
-                    (string-append tc-dir "/riscv32-unknown-elf-dramfs/include")))
+                       "/libraries/platforms/bigblade-verilator/link.mk")))
                 (setenv "RISCV" tc-dir)
                 (setenv "PATH"
                   (string-append tc-dir "/bin:"
@@ -604,9 +628,8 @@ example using Verilator simulation.")
                 (#$%hammerblade-setup-phase #:inputs inputs)
                 (let* ((sim (assoc-ref inputs "hammerblade-sim"))
                        (sim-dir (string-append sim "/share/hammerblade-sim"))
-                       (xgcc (assoc-ref inputs "riscv32-elf-gcc-bsg"))
+                       (tc-dir (assoc-ref inputs "bsg-riscv-toolchain"))
                        (newlib (assoc-ref inputs "riscv32-elf-newlib"))
-                       (xbinutils (assoc-ref inputs "binutils-cross-riscv32-elf"))
                        (srcdir (getcwd))
                        (replicant (string-append srcdir "/bsg_replicant"))
                        (manycore (string-append srcdir "/bsg_manycore"))
@@ -616,43 +639,8 @@ example using Verilator simulation.")
                                    "/bigblade-verilator/exec"))
                        (link-mk (string-append replicant
                          "/libraries/platforms/bigblade-verilator/link.mk"))
-                       (tc-dir (string-append srcdir "/riscv-toolchain"))
                        (examples '("hello" "bsg_scalar_print"
                                    "fib" "mul_div")))
-                  ;; Create toolchain wrapper (same as hammerblade-hello)
-                  (mkdir-p (string-append tc-dir "/bin"))
-                  (for-each
-                   (lambda (tool)
-                     (let ((src (string-append xgcc "/bin/riscv32-elf-" tool))
-                           (dst (string-append tc-dir "/bin/riscv32-unknown-elf-dramfs-" tool)))
-                       (when (file-exists? src) (symlink src dst))))
-                   '("gcc" "g++" "cpp"))
-                  (for-each
-                   (lambda (tool)
-                     (let ((src (string-append xbinutils "/bin/riscv32-elf-" tool))
-                           (dst (string-append tc-dir "/bin/riscv32-unknown-elf-dramfs-" tool)))
-                       (when (file-exists? src) (symlink src dst))))
-                   '("ar" "as" "ld" "nm" "objcopy" "objdump" "ranlib"
-                     "readelf" "size" "strings" "strip"))
-                  (let* ((gcc-lib-dir
-                          (let loop ((ins inputs))
-                            (if (null? ins) #f
-                                (let ((dir (string-append (cdar ins)
-                                             "/lib/gcc/riscv32-elf")))
-                                  (if (file-exists? dir) (cdar ins)
-                                      (loop (cdr ins)))))))
-                         (gcc-ver
-                          (car (scandir
-                            (string-append gcc-lib-dir "/lib/gcc/riscv32-elf")
-                            (lambda (f) (not (member f '("." ".."))))))))
-                    (mkdir-p (string-append tc-dir "/lib/gcc/riscv32-unknown-elf-dramfs"))
-                    (symlink (string-append gcc-lib-dir "/lib/gcc/riscv32-elf/" gcc-ver)
-                      (string-append tc-dir "/lib/gcc/riscv32-unknown-elf-dramfs/" gcc-ver))
-                    (mkdir-p (string-append tc-dir "/riscv32-unknown-elf-dramfs"))
-                    (symlink (string-append newlib "/riscv32-elf/lib")
-                      (string-append tc-dir "/riscv32-unknown-elf-dramfs/lib"))
-                    (symlink (string-append newlib "/riscv32-elf/include")
-                      (string-append tc-dir "/riscv32-unknown-elf-dramfs/include")))
                   (setenv "RISCV" tc-dir)
                   (setenv "PATH"
                     (string-append tc-dir "/bin:"
