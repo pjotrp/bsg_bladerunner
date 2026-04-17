@@ -6,3 +6,4 @@ bsg_cadenv
 aws-fpga.setup.log
 __pycache__
 upload.json
+verilator-guix/
