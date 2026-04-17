@@ -18,18 +18,52 @@ University of Washington.  Simulating it requires four components:
 Measured build times (on a single machine, with inputs cached):
 
 - **hammerblade-sim** -- ~18 min (one-time build, verilates + compiles C++; cached forever)
-- **hammerblade-hello** -- ~22s (kernel compile + host driver + 1 simulation run)
-- **hammerblade-examples** -- ~28s (kernel compile + 4 simulation runs for hello/bsg_scalar_print/fib/mul_div)
+- **hammerblade-hello** -- ~20s (kernel compile + host driver + 1 simulation run)
+- **hammerblade-examples** -- ~30s (kernel compile + 4 simulation runs for hello/bsg_scalar_print/fib/mul_div)
 - **riscv32-elf-gcc-bsg** -- ~5 min (Guix cross-gcc 14.3 + BSG Vanilla 2020 patch)
-- **riscv32-elf-newlib** -- ~1 min (BSG newlib fork for rv32imaf)
+- **riscv32-elf-newlib** -- ~17s (BSG newlib fork for rv32imaf)
 - **verilator** -- from Guix upstream (5.046)
-- **bsg-manycore** -- <1 min (source copy only)
+- **bsg-manycore** -- <1s (source copy only)
 
 The upgrade from Verilator 4.228 to 5.046 brought large improvements:
 sim build dropped from ~78 min to ~18 min, and simulation runtime is
-~5x faster (e.g. the message-passing demo: 3m 0s -> 36s wallclock).
-The Verilator 4 teardown segfault (fclose in _final phase) is also
-gone in v5.
+~5x faster.  The Verilator 4 teardown segfault (fclose in _final
+phase) is also gone in v5.
+
+## Old vs new: full comparison
+
+Original setup: BSG bundled GCC 9.2 + Verilator 4.228.
+Current setup: Guix GCC 14.3 (-fno-inline-functions) + Verilator 5.046.
+
+### Build times
+
+| Component        | Old (v4)  | New (v5)  | Speedup |
+|------------------|-----------|-----------|---------|
+| verilator        | 2 min     | (upstream)| --      |
+| hammerblade-sim  | ~78 min   | ~18 min   | 4.3x    |
+| hammerblade-hello| 2m 45s    | 20s       | 8x      |
+| hammerblade-examples | 1m 28s| 30s       | 3x      |
+
+### Binary size (.text) and cycle counts
+
+| Example          | OLD .text | NEW .text | OLD cycles  | NEW cycles  | Delta   |
+|------------------|-----------|-----------|-------------|-------------|---------|
+| hello            | 504 B     | 512 B     | 3,327,336   | 4,060,602   | +22%    |
+| bsg_scalar_print | 116 B     | 120 B     | 747,918     | 747,918     | 0%      |
+| fib (N=5)        | 355 B     | 359 B     | 862,470     | 866,466     | +0.5%   |
+| mul_div          | 124 B     | 124 B     | 1,004,994   | 966,366     | -4%     |
+
+OLD = GCC 9.2 + BSG Vanilla 2020 tuning.
+NEW = GCC 14.3 + BSG Vanilla 2020 tuning + -fno-inline-functions.
+
+### Simulation wallclock runtimes
+
+| Example          | Old (v4)  | New (v5)  | Speedup |
+|------------------|-----------|-----------|---------|
+| hello            | 176s      | 32s       | 5.5x    |
+| bsg_scalar_print | 18s       | 4s        | 4.5x    |
+| fib (N=15)       | 359s      | 65s       | 5.5x    |
+| message-passing  | 180s      | 36s       | 5.0x    |
 
 The verilated model compilation (~18 min) only happens once when
 building hammerblade-sim.  All example packages (hammerblade-hello,
