@@ -662,81 +662,11 @@ example using Verilator simulation.")
                    examples))))
             ;; Regression test: hash binaries + check runtime vs baseline
             (add-after 'build 'check-regression
-              (lambda* (#:key inputs #:allow-other-keys)
-                (let* ((srcdir (getcwd))
-                       (replicant (string-append srcdir "/bsg_replicant"))
-                       (manycore (string-append srcdir "/bsg_manycore"))
-                       ;; Baseline cycle counts from riscv32-elf-gcc-bsg with
-                       ;; -mtune=bsg_vanilla_2020 + -fno-inline-functions
-                       (baselines '(("hello"            . 4033962)
-                                    ("bsg_scalar_print" . 747918)
-                                    ("fib"              . 866466)
-                                    ("mul_div"          . 966366)))
-                       (threshold 1.20)
-                       (failures '()))
-                  (format #t "~%========================================~%")
-                  (format #t "REGRESSION TEST: binary hash + cycles~%")
-                  (format #t "========================================~%")
-                  (format #t "~a  ~a  ~a  ~a  ~a~%"
-                    (string-pad-right "example" 20)
-                    (string-pad-right "sha256[0:16]" 18)
-                    (string-pad-right "cycles" 10)
-                    (string-pad-right "baseline" 10)
-                    "ratio")
-                  (for-each
-                   (lambda (pair)
-                     (let* ((name (car pair))
-                            (base (cdr pair))
-                            (riscv-bin (string-append manycore
-                                         "/software/spmd/" name
-                                         "/main.riscv"))
-                            (exec-log (string-append replicant
-                                        "/examples/spmd/" name
-                                        "/exec.log"))
-                            ;; Hash binary
-                            (hash
-                             (if (file-exists? riscv-bin)
-                                 (let* ((p (open-pipe*
-                                             OPEN_READ "sha256sum"
-                                             riscv-bin))
-                                        (line (read-line p)))
-                                   (close-pipe p)
-                                   (if (string? line)
-                                       (substring line 0 16)
-                                       "missing"))
-                                 "missing"))
-                            ;; Extract cycle count
-                            (cycles
-                             (if (file-exists? exec-log)
-                                 (let* ((p (open-pipe
-                                             (string-append
-                                               "grep -oE 'Unfreezing tile t=[0-9]+' "
-                                               exec-log
-                                               " | head -1 | grep -oE '[0-9]+$'")
-                                             OPEN_READ))
-                                        (line (read-line p)))
-                                   (close-pipe p)
-                                   (if (string? line)
-                                       (string->number line) #f))
-                                 #f))
-                            (ratio (if cycles (/ cycles base 1.0) 0.0)))
-                       (format #t "~a  ~a  ~a  ~a  ~6,3f~a~%"
-                         (string-pad-right name 20)
-                         (string-pad-right hash 18)
-                         (string-pad-right
-                           (if cycles (number->string cycles) "?") 10)
-                         (string-pad-right (number->string base) 10)
-                         ratio
-                         (cond
-                           ((not cycles) " (MISSING!)")
-                           ((> ratio threshold) " (FAIL: >20% slower)")
-                           (else "")))
-                       (when (or (not cycles) (> ratio threshold))
-                         (set! failures (cons name failures)))))
-                   baselines)
-                  (format #t "========================================~%")
-                  (unless (null? failures)
-                    (error "Regression test failed for:" failures)))))
+              (lambda _
+                (let ((srcdir (getcwd)))
+                  (invoke "sh" #$(local-file "test/check-regression.sh")
+                          (string-append srcdir "/bsg_manycore")
+                          (string-append srcdir "/bsg_replicant")))))
             (replace 'install
               (lambda* (#:key outputs #:allow-other-keys)
                 (let* ((out (assoc-ref outputs "out"))
