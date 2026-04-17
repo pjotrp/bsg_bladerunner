@@ -595,15 +595,7 @@ packages like hammerblade-hello use this as an input.")
                           "BSG_PLATFORM=bigblade-verilator"
                           (string-append "BSG_MACHINE_PATH=" machine-path)
                           "exec.log")))))
-          (replace 'install
-            (lambda* (#:key outputs #:allow-other-keys)
-              (let* ((out (assoc-ref outputs "out"))
-                     (share (string-append out "/share/hammerblade"))
-                     (hello (string-append (getcwd)
-                              "/bsg_replicant/examples/spmd/hello")))
-                (mkdir-p share)
-                (copy-file (string-append hello "/exec.log")
-                           (string-append share "/hello-exec.log"))))))))
+          (delete 'install))))
     (home-page "https://github.com/bespoke-silicon-group/bsg_bladerunner")
     (synopsis "HammerBlade manycore hello world simulation")
     (description "Builds and runs the HammerBlade manycore hello world SPMD
@@ -667,28 +659,7 @@ example using Verilator simulation.")
                   (invoke "sh" #$(local-file "test/check-regression.sh")
                           (string-append srcdir "/bsg_manycore")
                           (string-append srcdir "/bsg_replicant")))))
-            (replace 'install
-              (lambda* (#:key outputs #:allow-other-keys)
-                (let* ((out (assoc-ref outputs "out"))
-                       (share (string-append out "/share/hammerblade"))
-                       (replicant (string-append (getcwd) "/bsg_replicant"))
-                       (manycore (string-append (getcwd) "/bsg_manycore"))
-                       (examples '("hello" "bsg_scalar_print"
-                                   "fib" "mul_div")))
-                  (mkdir-p share)
-                  (for-each
-                   (lambda (name)
-                     (let ((log (string-append replicant
-                                  "/examples/spmd/" name "/exec.log"))
-                           (bin (string-append manycore
-                                  "/software/spmd/" name "/main.riscv")))
-                       (when (file-exists? log)
-                         (copy-file log
-                           (string-append share "/" name "-exec.log")))
-                       (when (file-exists? bin)
-                         (copy-file bin
-                           (string-append share "/" name ".riscv")))))
-                   examples))))))))
+            (delete 'install)))))
     (synopsis "HammerBlade manycore SPMD examples")
     (description "Builds and runs multiple HammerBlade manycore SPMD examples
 using Verilator simulation.  The verilated model is built once (~18 min) and
