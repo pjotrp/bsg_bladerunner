@@ -104,6 +104,15 @@ NEW = GCC 14.3 + BSG Vanilla 2020 tuning + -fno-inline-functions.
 Note these timings are the actual runtime/user experience of the simulator. The
 cycle counts are similar (see the table above).
 
+### Multithreaded simulation
+
+The BSG build system passes `--threads 16` to verilator, which
+generates a multithreaded C++ model.  At runtime, simsc uses ~16
+host CPU threads to simulate the 128-core manycore in parallel.
+Evidence from the message-passing benchmark: wall clock 36s vs CPU
+time 8m59s = ~15x parallelism.  This is a major contributor to the
+5x speedup from Verilator 4 to 5 (v4 had weaker multithreading).
+
 The verilated model compilation (~20 min) only happens once when
 building hammerblade-sim.  All example packages (hammerblade-hello,
 hammerblade-examples) reuse the cached simsc binary and platform
