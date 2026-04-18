@@ -160,19 +160,21 @@ small reentrant struct, suitable for embedded/manycore targets.")
                  (out #$output)
                  (bin (string-append out "/bin")))
             (mkdir-p bin)
-            ;; Symlink gcc/g++/cpp
+            ;; Symlink gcc/g++/cpp (both riscv32-elf-* and dramfs-* names)
             (for-each
              (lambda (tool)
-               (let ((src (string-append xgcc "/bin/riscv32-elf-" tool))
-                     (dst (string-append bin "/riscv32-unknown-elf-dramfs-" tool)))
-                 (when (file-exists? src) (symlink src dst))))
+               (let ((src (string-append xgcc "/bin/riscv32-elf-" tool)))
+                 (when (file-exists? src)
+                   (symlink src (string-append bin "/riscv32-elf-" tool))
+                   (symlink src (string-append bin "/riscv32-unknown-elf-dramfs-" tool)))))
              '("gcc" "g++" "cpp"))
-            ;; Symlink binutils
+            ;; Symlink binutils (both riscv32-elf-* and dramfs-* names)
             (for-each
              (lambda (tool)
-               (let ((src (string-append xbinutils "/bin/riscv32-elf-" tool))
-                     (dst (string-append bin "/riscv32-unknown-elf-dramfs-" tool)))
-                 (when (file-exists? src) (symlink src dst))))
+               (let ((src (string-append xbinutils "/bin/riscv32-elf-" tool)))
+                 (when (file-exists? src)
+                   (symlink src (string-append bin "/riscv32-elf-" tool))
+                   (symlink src (string-append bin "/riscv32-unknown-elf-dramfs-" tool)))))
              '("ar" "as" "ld" "nm" "objcopy" "objdump" "ranlib"
                "readelf" "size" "strings" "strip"))
             ;; Set up lib/include dirs so gcc finds newlib + libgcc
@@ -737,5 +739,43 @@ example using Verilator simulation.")
 using Verilator simulation.  The verilated model is built once (~20 min) and
 reused across all examples.  Includes: hello, bsg_scalar_print, fib, mul_div.
 Some examples are patched to reduce iteration counts for faster simulation.")))
+
+;;;
+;;; HammerBlade development environment
+;;;
+;; Meta-package that propagates all tools needed to build and run custom
+;; SPMD kernels outside bsg_bladerunner.  Use with:
+;;   guix shell hammerblade-dev -- make run
+
+(define-public hammerblade-dev
+  (package
+    (name "hammerblade-dev")
+    (version (git-version "0.0.0" %bsg-bladerunner-revision
+                          %bsg-bladerunner-commit))
+    (source #f)
+    (build-system trivial-build-system)
+    (arguments
+     (list #:modules '((guix build utils))
+           #:builder #~(begin
+                         (use-modules (guix build utils))
+                         (mkdir-p #$output))))
+    (propagated-inputs
+     (list hammerblade-sim
+           bsg-manycore
+           bsg-replicant
+           basejump-stl
+           bsg-riscv-toolchain
+           riscv32-elf-newlib
+           verilator-dev
+           gcc-toolchain-12
+           bc git-minimal perl python-wrapper which coreutils
+           gnu-make))
+    (home-page "https://github.com/bespoke-silicon-group/bsg_bladerunner")
+    (synopsis "HammerBlade development environment")
+    (description "Meta-package providing all tools needed to build and run
+custom HammerBlade manycore SPMD programs: RISC-V cross-compiler (GCC 14.3
+with BSG Vanilla 2020 tuning), newlib, pre-built verilated simulator (simsc),
+host C/C++ compiler, and BSG source trees.")
+    (license license:bsd-3)))
 
 hammerblade-examples
