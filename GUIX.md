@@ -143,8 +143,8 @@ in upstream Guix or require BSG-specific versions:
 - **riscv32-elf-gcc-bsg** -- Guix `cross-gcc "riscv32-elf"` (GCC 14.3) + BSG Vanilla 2020 pipeline model patch
 - **riscv32-elf-newlib** -- BSG newlib fork (from `bsg_newlib_dramfs`) compiled for rv32imaf/ilp32f with small reent struct
 - **hammerblade-sim** -- verilated simulation platform: simsc binary + platform .so files + machine config (~69 MB total)
-- **hammerblade-hello** -- hello world example; reuses pre-built simsc (~22s)
-- **hammerblade-examples** -- four SPMD examples (hello, bsg_scalar_print, fib, mul_div) with binary-hash + cycle-count regression tests (~28s)
+- **hammerblade-hello** -- hello world example; reuses pre-built simsc (~27s)
+- **hammerblade-examples** -- four SPMD examples (hello, bsg_scalar_print, fib, mul_div) with binary-hash + cycle-count regression tests (~33s)
 
 Plus Guix's standard `cross-binutils "riscv32-elf"` (binutils 2.44) used
 as-is without patches!
