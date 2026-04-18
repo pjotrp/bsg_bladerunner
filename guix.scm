@@ -455,10 +455,8 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
         ;; DRAMSim3 config path symlink: libdramsim3.so has a
         ;; compile-time hardcoded BASEJUMP_STL_DIR from the sim build.
         ;; Create a symlink at that path so configs are found at runtime.
-        (let* ((dramsim-so
-                (car (find-files
-                      (string-append replicant "/libraries")
-                      "libdramsim3\\.so$")))
+        (let* ((sim-lib (string-append sim "/lib"))
+               (dramsim-so (string-append sim-lib "/libdramsim3.so"))
                (pipe (open-pipe*
                        OPEN_READ "grep" "-ao"
                        "/tmp/guix-build-hammerblade-sim[^[:space:]]*/source"
@@ -470,12 +468,9 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
             (mkdir-p sim-source)
             (symlink (string-append srcdir "/basejump_stl")
                      (string-append sim-source "/basejump_stl"))))
-        ;; LD_LIBRARY_PATH for simsc
+        ;; LD_LIBRARY_PATH: sim package installs all .so to lib/
         (setenv "LD_LIBRARY_PATH"
-          (string-join
-           (map dirname
-             (find-files (string-append replicant "/libraries") "\\.so$"))
-           ":"))
+          (string-append sim "/lib"))
         ;; Return key paths
         `((replicant . ,replicant)
           (manycore . ,manycore)
@@ -513,6 +508,8 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
     (arguments
      (list
       #:tests? #f
+      ;; .so files have build-time rpaths from the BSG make system
+      #:validate-runpath? #f
       #:modules '((guix build gnu-build-system)
                   (guix build utils)
                   (ice-9 match))
@@ -565,14 +562,27 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
                    "/bigblade-verilator/exec/simsc")
                  (string-append dest "/exec/simsc"))
                 (chmod (string-append dest "/exec/simsc") #o755)
-                ;; Install platform shared libraries in their tree layout
-                (for-each
-                 (lambda (f)
-                   (let ((rel (string-drop f (string-length replicant))))
-                     (mkdir-p (dirname (string-append dest rel)))
-                     (copy-file f (string-append dest rel))))
-                 (find-files (string-append replicant "/libraries")
-                             "\\.so$"))
+                ;; Install shared libraries to lib/ (standard location)
+                ;; and preserve tree layout under share/ for build system
+                (let ((lib (string-append out "/lib")))
+                  (mkdir-p lib)
+                  (for-each
+                   (lambda (f)
+                     (let* ((name (basename f))
+                            (dest-lib (string-append lib "/" name))
+                            (rel (string-drop f (string-length replicant))))
+                       ;; Copy to share/ tree (for BSG build system)
+                       (mkdir-p (dirname (string-append dest rel)))
+                       (copy-file f (string-append dest rel))
+                       ;; Symlink to lib/ (for LD_LIBRARY_PATH)
+                       (symlink (string-append dest rel) dest-lib)
+                       ;; Create .so.1 symlink if SONAME requires it
+                       (when (not (file-exists?
+                                   (string-append lib "/" name ".1")))
+                         (symlink dest-lib
+                                  (string-append lib "/" name ".1")))))
+                   (find-files (string-append replicant "/libraries")
+                               "\\.so$")))
                 ;; Install machine config files
                 (copy-recursively machine-path
                   (string-append dest "/machine")
@@ -621,11 +631,7 @@ packages like hammerblade-hello use this as an input.")
                           %bsg-bladerunner-commit))
     (source bsg-bladerunner-source)
     (build-system gnu-build-system)
-    (native-inputs
-     (list hammerblade-sim verilator-dev bsg-manycore
-           bsg-riscv-toolchain riscv32-elf-newlib
-           gcc-toolchain-12
-           bc git-minimal perl python-wrapper which coreutils))
+    (native-inputs (list hammerblade-dev))
     (inputs (list zlib))
     (arguments
      (list
