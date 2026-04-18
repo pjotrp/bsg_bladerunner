@@ -277,7 +277,7 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
              (manycore (string-append srcdir "/bsg_manycore"))
              (basejump (string-append srcdir "/basejump_stl"))
              (machine-path (string-append replicant
-               "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
+               "/machines/bigblade_pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
              (platform-path (string-append replicant
                "/libraries/platforms/bigblade-verilator"))
              ;; Verilator 5 requires VERILATOR_ROOT to be the actual
@@ -345,7 +345,7 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
              (replicant (string-append srcdir "/bsg_replicant"))
              (manycore (string-append srcdir "/bsg_manycore"))
              (machine-path (string-append replicant
-               "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
+               "/machines/bigblade_pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
              (exec-dir (string-append machine-path
                          "/bigblade-verilator/exec"))
              (link-mk (string-append replicant
@@ -473,7 +473,7 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
               (let* ((srcdir (getcwd))
                      (replicant (string-append srcdir "/bsg_replicant"))
                      (machine-path (string-append replicant
-                       "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel")))
+                       "/machines/bigblade_pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel")))
                 ;; Build only simsc + platform libraries (the slow part)
                 (with-directory-excursion
                     (string-append replicant "/examples/spmd/hello")
@@ -488,7 +488,7 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
                      (srcdir (getcwd))
                      (replicant (string-append srcdir "/bsg_replicant"))
                      (machine-path (string-append replicant
-                       "/machines/pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
+                       "/machines/bigblade_pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel"))
                      (dest (string-append out "/share/hammerblade-sim")))
                 ;; Install only simsc binary.  The verilator
                 ;; .cpp/.o/.a/.mk files are not needed:

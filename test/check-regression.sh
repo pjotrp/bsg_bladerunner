@@ -5,6 +5,7 @@
 #
 # Baselines: cycle counts from riscv32-elf-gcc-bsg (GCC 14.3)
 # with -mtune=bsg_vanilla_2020 -fno-inline-functions
+# Machine: bigblade_pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel
 set -eu
 
 MANYCORE="$1"
@@ -12,10 +13,10 @@ REPLICANT="$2"
 THRESHOLD="120"  # fail if >20% slower (cycles as percentage of baseline)
 
 # name:baseline_cycles
-BASELINES="hello:4033962
-bsg_scalar_print:747918
-fib:866466
-mul_div:966366"
+BASELINES="hello:20091000
+bsg_scalar_print:2300000
+fib:2808000
+mul_div:3430000"
 
 echo ""
 echo "========================================"
