@@ -44,11 +44,12 @@ University of Washington.  Simulating it requires four components:
 
 Measured build times (on a single machine, with inputs cached):
 
-- **hammerblade-sim** -- ~18 min (one-time build, verilates + compiles C++; cached forever)
-- **hammerblade-hello** -- ~20s (kernel compile + host driver + 1 simulation run)
-- **hammerblade-examples** -- ~30s (kernel compile + 4 simulation runs for hello/bsg_scalar_print/fib/mul_div)
+- **hammerblade-sim** -- ~17 min (one-time build, verilates + compiles C++; cached forever)
+- **hammerblade-hello** -- ~27s (kernel compile + host driver + 1 simulation run)
+- **hammerblade-examples** -- ~33s (kernel compile + 4 simulation runs for hello/bsg_scalar_print/fib/mul_div)
 - **riscv32-elf-gcc-bsg** -- ~5 min (Guix cross-gcc 14.3 + BSG Vanilla 2020 patch)
 - **riscv32-elf-newlib** -- ~17s (BSG newlib fork for rv32imaf)
+- **bsg-riscv-toolchain** -- <1s (symlink wrapper)
 - **verilator** -- from Guix upstream (5.046)
 - **bsg-manycore** -- <1s (source copy only)
 
@@ -106,9 +107,13 @@ libdramsim3.so.
 
 ## Package output sizes
 
-- **hammerblade-sim**: ~69 MB (simsc + .so libs + machine config)
-- **hammerblade-hello**: a few MB (exec.log + main.riscv)
-- **hammerblade-examples**: a few MB (4 exec.log + 4 main.riscv)
+- **bsg-manycore**: 20 MB (source tree: RTL, software, HardFloat)
+- **basejump-stl**: 15 MB (source tree + DRAMSim3, ramulator dropped)
+- **bsg-replicant**: 6.2 MB (source tree)
+- **bsg-riscv-toolchain**: 92 KB (symlinks only)
+- **hammerblade-sim**: 71 MB (simsc + .so libs + machine config)
+- **hammerblade-hello**: 20 KB (build-only, no install)
+- **hammerblade-examples**: 20 KB (build-only, no install)
 
 ## Prerequisites
 
@@ -427,15 +432,15 @@ guix build -f guix.scm
 # (edit last line to riscv32-elf-newlib)
 guix build -f guix.scm
 
-# Build verilated simulation platform (~18 min, one time)
+# Build verilated simulation platform (~17 min, one time)
 # (edit last line to hammerblade-sim)
 guix build -f guix.scm
 
-# Build and run hello world (~22s with cached sim)
+# Build and run hello world (~27s with cached sim)
 # (edit last line to hammerblade-hello)
 guix build -f guix.scm
 
-# Build and run all examples with regression test (~28s with cached sim)
+# Build and run all examples with regression test (~33s with cached sim)
 # (edit last line to hammerblade-examples)
 guix build -f guix.scm
 
@@ -447,22 +452,21 @@ bash guix-run.sh hello       # run hello example
 ## Package dependency graph
 
 ```
-hammerblade-sim            (~18 min, from GitHub commit 8100e97)
+hammerblade-sim            (~17 min, from GitHub commit 8100e97)
   |-- verilator            (Guix upstream 5.046)
-  |-- bsg-manycore         (RTL + software, recursive for HardFloat)
-  |-- bsg-replicant-source (simulation harness, from GitHub)
-  +-- basejump-stl-source  (IP library + DRAMSim3, recursive)
+  |-- bsg-manycore         (20 MB, RTL + software, recursive for HardFloat)
+  |-- bsg-replicant-source (6.2 MB, simulation harness)
+  |-- basejump-stl-source  (4 MB, IP library, non-recursive)
+  +-- dramsim3-source      (11 MB, DRAM simulator, unbundled)
 
-hammerblade-hello          (~22s, reuses hammerblade-sim)
-  |-- hammerblade-sim      (pre-built simsc + platform libs)
+hammerblade-hello          (~27s, reuses hammerblade-sim)
+  |-- hammerblade-sim      (pre-built simsc 71 MB)
   |-- bsg-manycore         (kernel source)
-  |-- riscv32-elf-gcc-bsg  (Guix cross-gcc 14.3 + BSG tune patch)
-  |-- riscv32-elf-newlib   (BSG newlib fork, rv32imaf/ilp32f)
-  |-- cross-binutils       (Guix standard, unpatched)
+  |-- bsg-riscv-toolchain  (dramfs symlinks -> gcc-bsg + binutils + newlib)
   |-- bsg-replicant-source (host driver + make system)
   +-- basejump-stl-source  (DRAMSim3 configs)
 
-hammerblade-examples       (~28s, reuses hammerblade-sim)
+hammerblade-examples       (~33s, reuses hammerblade-sim)
   +-- (same deps as hammerblade-hello)
 ```
 

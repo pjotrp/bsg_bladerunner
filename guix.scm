@@ -225,16 +225,25 @@ infrastructure for the BSG Manycore processor used in HammerBlade.")
     (file-name "bsg-replicant-checkout")
     (sha256 (base32 "1kbalc5yav6jxrwwk1pbf8dr3hrhnml49jkxg2zh11zwab0s1gzf"))))
 
+(define dramsim3-source
+  (let ((commit "f3edf85a2303ac05fbecdc4b304a300e40b527e2"))
+    (origin
+      (method git-fetch)
+      (uri (git-reference
+            (url "https://github.com/bsg-external/DRAMsim3")
+            (commit commit)))
+      (file-name (git-file-name "dramsim3" commit))
+      (sha256 (base32 "0jldzzj1fg6p1wjwl0z1774vshrdwcm4rgz8w76izcw25qhbzf4d")))))
+
 (define basejump-stl-source
   (let ((commit "5c66f9dea8c866393dc9de948563c61d81651571"))
     (origin
       (method git-fetch)
       (uri (git-reference
             (url "https://github.com/bespoke-silicon-group/basejump_stl")
-            (commit commit)
-            (recursive? #t)))
+            (commit commit)))
       (file-name "basejump-stl-checkout")
-      (sha256 (base32 "187zwc4z5rbpfddssn84xp7bv2akwz8nz4vkzka7vils16gpq219")))))
+      (sha256 (base32 "1g47m96ifjcbgqxhj5j39rk8yqrnjsjcmmf14nz2xbh6kpdi26kr")))))
 
 ;; Source-only packages so users can access these via `guix shell`
 ;; (for example, to build their own SPMD kernels outside bsg_bladerunner).
@@ -259,7 +268,13 @@ simulation platforms, and SPMD example infrastructure.")
     (source basejump-stl-source)
     (build-system copy-build-system)
     (arguments
-     (list #:install-plan #~'(("." "share/basejump-stl"))))
+     (list
+      #:install-plan #~'(("." "share/basejump-stl"))
+      #:phases
+      #~(modify-phases %standard-phases
+          (add-after 'unpack 'add-dramsim3
+            (lambda _
+              (copy-recursively #$dramsim3-source "imports/DRAMSim3"))))))
     (home-page "https://github.com/bespoke-silicon-group/basejump_stl")
     (synopsis "BaseJump STL standard library + DRAMSim3 for HammerBlade")
     (description "SystemVerilog standard library (FIFOs, muxes, caches,
@@ -465,7 +480,8 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
                    (lambda (f) (false-if-exception (make-file-writable f)))
                    (find-files dest "." #:directories? #t))))
                (list (cons #$bsg-replicant-source "bsg_replicant")
-                     (cons #$basejump-stl-source "basejump_stl")))))
+                     (cons #$basejump-stl-source "basejump_stl")
+                     (cons #$dramsim3-source "basejump_stl/imports/DRAMSim3")))))
           (replace 'build
             (lambda* (#:key inputs #:allow-other-keys)
               ;; Set up the BSG build tree
@@ -578,7 +594,8 @@ packages like hammerblade-hello use this as an input.")
                    (lambda (f) (false-if-exception (make-file-writable f)))
                    (find-files dest "." #:directories? #t))))
                (list (cons #$bsg-replicant-source "bsg_replicant")
-                     (cons #$basejump-stl-source "basejump_stl")))))
+                     (cons #$basejump-stl-source "basejump_stl")
+                     (cons #$dramsim3-source "basejump_stl/imports/DRAMSim3")))))
           (replace 'build
             (lambda* (#:key inputs #:allow-other-keys)
               (let* ((env (#$%hammerblade-spmd-setup #:inputs inputs))
