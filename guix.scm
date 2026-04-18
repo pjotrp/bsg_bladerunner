@@ -8,14 +8,15 @@
   ((guix licenses) #:prefix license:)
   (guix packages) (guix gexp) (guix git-download) (guix utils)
   (guix build-system copy) (guix build-system gnu) (guix build-system trivial)
-  (gnu packages algebra) (gnu packages autotools) (gnu packages base)
-  (gnu packages bison) (gnu packages compression) (gnu packages commencement)
-  (gnu packages cross-base)
-  (gnu packages curl) (gnu packages electronics)
-  (gnu packages flex) (gnu packages gcc)
-  (gnu packages gettext) (gnu packages linux) (gnu packages multiprecision)
-  (gnu packages perl) (gnu packages python) (gnu packages texinfo)
-  (gnu packages version-control) (gnu packages wget))
+  (gnu packages algebra)          ; bc
+  (gnu packages base)             ; coreutils, which
+  (gnu packages compression)      ; zlib
+  (gnu packages commencement)     ; gcc-toolchain-12
+  (gnu packages cross-base)       ; cross-binutils, cross-gcc
+  (gnu packages electronics)      ; verilator
+  (gnu packages perl)
+  (gnu packages python)
+  (gnu packages version-control)) ; git-minimal
 
 (define %dir (dirname (current-filename)))
 
@@ -206,6 +207,16 @@ this naming convention.")
 ;;; BSG Manycore source tree (RTL, software, build system)
 ;;;
 
+(define hardfloat-source
+  (let ((commit "5b7d5fe2df7e297b5ba095b3eb8a9517dc2e9d88"))
+    (origin
+      (method git-fetch)
+      (uri (git-reference
+            (url "https://github.com/bsg-external/HardFloat")
+            (commit commit)))
+      (file-name (git-file-name "hardfloat" commit))
+      (sha256 (base32 "0zwic2i89ngqb9fa0hcihq3c3794y12qlfdzbrai7aclwydqgjhw")))))
+
 (define-public bsg-manycore
   (let ((commit "bfe582b2e9b22cfb55076465ad3bba8f243bd5d4")
         (revision "0"))
@@ -216,11 +227,10 @@ this naming convention.")
                 (method git-fetch)
                 (uri (git-reference
                       (url "https://github.com/bespoke-silicon-group/bsg_manycore")
-                      (commit commit)
-                      (recursive? #t)))
+                      (commit commit)))
                 (file-name (git-file-name name version))
                 (sha256
-                 (base32 "0b798fsc480x8fq0arrsfv53y5ara02nflb8cg620iidgjxz3ci9"))))
+                 (base32 "0d58v1qm195r4a3a9fsddqvfizldasjapd2xwa8d15ghzmx5j1lw"))))
       (build-system copy-build-system)
       (arguments
        (list
@@ -230,7 +240,12 @@ this naming convention.")
             ("imports" "share/bsg-manycore/imports")
             ("machines" "share/bsg-manycore/machines")
             ("testbenches" "share/bsg-manycore/testbenches")
-            ("Makefile" "share/bsg-manycore/Makefile"))))
+            ("Makefile" "share/bsg-manycore/Makefile"))
+        #:phases
+        #~(modify-phases %standard-phases
+            (add-after 'unpack 'add-hardfloat
+              (lambda _
+                (copy-recursively #$hardfloat-source "imports/HardFloat"))))))
       (home-page "https://github.com/bespoke-silicon-group/bsg_manycore")
       (synopsis "BSG Manycore RTL and software for HammerBlade")
       (description "SystemVerilog RTL, software libraries, and build
@@ -435,7 +450,9 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
            "echo 'skipping link (pre-built)'")
           (("\\$\\(CXX\\) -c \\$\\(CXXFLAGS\\) -I\\$\\(dir \\$@\\) \\$\\^ -o \\$@")
            "echo 'skipping simulator.o compile (pre-built)'"))
-        ;; DRAMSim3 config path symlink
+        ;; DRAMSim3 config path symlink: libdramsim3.so has a
+        ;; compile-time hardcoded BASEJUMP_STL_DIR from the sim build.
+        ;; Create a symlink at that path so configs are found at runtime.
         (let* ((dramsim-so
                 (car (find-files
                       (string-append replicant "/libraries")
@@ -462,25 +479,30 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
           (manycore . ,manycore)
           (machine-path . ,machine-path)))))
 
+(define %bsg-bladerunner-commit "8100e9726654a00f11b40b9cf4a2c9a510f77dbb")
+(define %bsg-bladerunner-revision "0")
+
+(define bsg-bladerunner-source
+  (origin
+    (method git-fetch)
+    (uri (git-reference
+          (url "https://github.com/bespoke-silicon-group/bsg_bladerunner")
+          (commit %bsg-bladerunner-commit)))
+    (file-name (git-file-name "bsg-bladerunner" %bsg-bladerunner-commit))
+    (sha256
+     (base32 "1hmrmcngmm049jpsy8n9wl9z5yy4dbn68z7dfilr93v0az2v1yhd"))
+    (modules '((guix build utils)))
+    (snippet
+     '(for-each delete-file-recursively
+                (filter file-exists?
+                        '("bsg_manycore" "aws-fpga" "verilator"))))))
+
 (define-public hammerblade-sim
-  (let ((commit "8100e9726654a00f11b40b9cf4a2c9a510f77dbb")
-        (revision "0"))
   (package
     (name "hammerblade-sim")
-    (version (git-version "0.0.0" revision commit))
-    (source (origin
-              (method git-fetch)
-              (uri (git-reference
-                    (url "https://github.com/bespoke-silicon-group/bsg_bladerunner")
-                    (commit commit)))
-              (file-name (git-file-name name version))
-              (sha256
-               (base32 "1hmrmcngmm049jpsy8n9wl9z5yy4dbn68z7dfilr93v0az2v1yhd"))
-              (modules '((guix build utils)))
-              (snippet
-               '(for-each delete-file-recursively
-                          (filter file-exists?
-                                  '("bsg_manycore" "aws-fpga" "verilator"))))))
+    (version (git-version "0.0.0" %bsg-bladerunner-revision
+                          %bsg-bladerunner-commit))
+    (source bsg-bladerunner-source)
     (build-system gnu-build-system)
     (native-inputs
      (list verilator-dev bsg-manycore gcc-toolchain-12
@@ -565,31 +587,18 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
 libraries for the HammerBlade manycore.  This is the slow build (~20 min
 with Verilator 5) that compiles the verilated RTL model.  Example
 packages like hammerblade-hello use this as an input.")
-    (license license:bsd-3))))
+    (license license:bsd-3)))
 
 ;;;
 ;;; HammerBlade hello world example
 ;;;
 
 (define-public hammerblade-hello
-  (let ((commit "8100e9726654a00f11b40b9cf4a2c9a510f77dbb")
-        (revision "0"))
   (package
     (name "hammerblade-hello")
-    (version (git-version "0.0.0" revision commit))
-    (source (origin
-              (method git-fetch)
-              (uri (git-reference
-                    (url "https://github.com/bespoke-silicon-group/bsg_bladerunner")
-                    (commit commit)))
-              (file-name (git-file-name name version))
-              (sha256
-               (base32 "1hmrmcngmm049jpsy8n9wl9z5yy4dbn68z7dfilr93v0az2v1yhd"))
-              (modules '((guix build utils)))
-              (snippet
-               '(for-each delete-file-recursively
-                          (filter file-exists?
-                                  '("bsg_manycore" "aws-fpga" "verilator"))))))
+    (version (git-version "0.0.0" %bsg-bladerunner-revision
+                          %bsg-bladerunner-commit))
+    (source bsg-bladerunner-source)
     (build-system gnu-build-system)
     (native-inputs
      (list hammerblade-sim verilator-dev bsg-manycore
@@ -644,7 +653,7 @@ packages like hammerblade-hello use this as an input.")
     (synopsis "HammerBlade manycore hello world simulation")
     (description "Builds and runs the HammerBlade manycore hello world SPMD
 example using Verilator simulation.")
-    (license license:bsd-3))))
+    (license license:bsd-3)))
 
 ;;;
 ;;; HammerBlade examples (builds simsc once, runs multiple SPMD examples)
