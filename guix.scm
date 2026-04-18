@@ -562,7 +562,7 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
     (home-page "https://github.com/bespoke-silicon-group/bsg_bladerunner")
     (synopsis "HammerBlade verilated simulation platform")
     (description "Verilated simulation binary (simsc) and platform shared
-libraries for the HammerBlade manycore.  This is the slow build (~18 min
+libraries for the HammerBlade manycore.  This is the slow build (~20 min
 with Verilator 5) that compiles the verilated RTL model.  Example
 packages like hammerblade-hello use this as an input.")
     (license license:bsd-3))))
@@ -706,7 +706,7 @@ example using Verilator simulation.")
             (delete 'install)))))
     (synopsis "HammerBlade manycore SPMD examples")
     (description "Builds and runs multiple HammerBlade manycore SPMD examples
-using Verilator simulation.  The verilated model is built once (~18 min) and
+using Verilator simulation.  The verilated model is built once (~20 min) and
 reused across all examples.  Includes: hello, bsg_scalar_print, fib, mul_div.
 Some examples are patched to reduce iteration counts for faster simulation.")))
 

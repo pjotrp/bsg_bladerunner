@@ -35,7 +35,7 @@ guix build -f guix.scm
 The HammerBlade is a 128-core RISC-V manycore processor designed at the
 University of Washington.  Simulating it requires four components:
 
-1. **Verilator 5.046** -- translates the SystemVerilog RTL into C++
+1. **Verilator 5.047-dev** -- translates the SystemVerilog RTL into C++
 2. **BSG Manycore** -- RTL, software libraries, and build infrastructure
 3. **RISC-V cross-compiler** -- GCC 14.3 rv32imaf bare-metal (Guix cross-gcc + BSG patch)
 4. **Simulation harness** -- verilated model + host driver + RISC-V kernel
@@ -44,33 +44,41 @@ University of Washington.  Simulating it requires four components:
 
 Measured build times (on a single machine, with inputs cached):
 
-- **hammerblade-sim** -- ~17 min (one-time build, verilates + compiles C++; cached forever)
+- **hammerblade-sim** -- ~20 min (one-time build, verilates + compiles C++; cached forever)
 - **hammerblade-hello** -- ~27s (kernel compile + host driver + 1 simulation run)
-- **hammerblade-examples** -- ~33s (kernel compile + 4 simulation runs for hello/bsg_scalar_print/fib/mul_div)
+- **hammerblade-examples** -- ~37s (kernel compile + 4 simulation runs for hello/bsg_scalar_print/fib/mul_div)
 - **riscv32-elf-gcc-bsg** -- ~5 min (Guix cross-gcc 14.3 + BSG Vanilla 2020 patch)
 - **riscv32-elf-newlib** -- ~17s (BSG newlib fork for rv32imaf)
 - **bsg-riscv-toolchain** -- <1s (symlink wrapper)
-- **verilator** -- from Guix upstream (5.046)
+- **verilator-dev** -- 5.047 dev snapshot (commit ba508c0)
 - **bsg-manycore** -- <1s (source copy only)
 
-The upgrade from Verilator 4.228 to 5.046 brought large improvements:
-sim build dropped from ~78 min to ~18 min, and simulation runtime is
+The upgrade from Verilator 4.228 to 5.x brought large improvements:
+sim build dropped from ~78 min to ~20 min, and simulation runtime is
 ~5x faster.  The Verilator 4 teardown segfault (fclose in _final
 phase) is also gone in v5.
+
+We use a development snapshot of Verilator 5.047 (commit ba508c0,
+2026-04-17) rather than the Guix upstream 5.046 release.  The dev
+version's verilation phase is slower (293s vs 117s) due to new
+analysis passes and higher memory usage (6.6 GB vs 3.4 GB), but
+the verilator_bin binary is built with -O3 in both cases.  The
+actual simulation runtime is the same -- verilation only happens
+once when building hammerblade-sim.
 
 ## Old vs new: full comparison
 
 Original setup: BSG bundled GCC 9.2 + Verilator 4.228.
-Current setup: Guix GCC 14.3 (-fno-inline-functions) + Verilator 5.046.
+Current setup: Guix GCC 14.3 (-fno-inline-functions) + Verilator 5.047-dev.
 
 ### Build times
 
 | Component        | Old (v4)  | New (v5)  | Speedup |
 |------------------|-----------|-----------|---------|
-| verilator        | 2 min     | (upstream)| --      |
-| hammerblade-sim  | ~78 min   | ~18 min   | 4.3x    |
-| hammerblade-hello| 2m 45s    | 20s       | 8x      |
-| hammerblade-examples | 1m 28s| 30s       | 3x      |
+| verilator        | 2 min     | 5.047-dev | --      |
+| hammerblade-sim  | ~78 min   | ~20 min   | 3.9x    |
+| hammerblade-hello| 2m 45s    | 27s       | 6x      |
+| hammerblade-examples | 1m 28s| 37s       | 2.4x    |
 
 ### Binary size (.text) and cycle counts
 
@@ -96,7 +104,7 @@ NEW = GCC 14.3 + BSG Vanilla 2020 tuning + -fno-inline-functions.
 Note these timings are the actual runtime/user experience of the simulator. The
 cycle counts are similar (see the table above).
 
-The verilated model compilation (~18 min) only happens once when
+The verilated model compilation (~20 min) only happens once when
 building hammerblade-sim.  All example packages (hammerblade-hello,
 hammerblade-examples) reuse the cached simsc binary and platform
 libraries.  The reuse works by copying the pre-built simsc,
@@ -128,7 +136,7 @@ The following tools come from Guix rather than being built from source:
 - **cross-gcc "riscv32-elf"** (GCC 14.3) -- base for riscv32-elf-gcc-bsg
 - **cross-binutils "riscv32-elf"** (binutils 2.44) -- unbundled RISC-V binutils, used as-is
 - **perl, python** -- used by verilator and the BSG build system
-- **verilator** (5.046) -- SystemVerilog to C++ translator
+- **verilator-dev** (5.047, commit ba508c0) -- SystemVerilog to C++ translator
 - **zlib** -- compression library (LTO support, also linked into simsc)
 - **git** -- the BSG Makefiles call `git rev-parse` to locate repository roots
 - **bc** -- used by BSG machine config Makefiles for arithmetic
@@ -144,7 +152,7 @@ in upstream Guix or require BSG-specific versions:
 - **riscv32-elf-newlib** -- BSG newlib fork (from `bsg_newlib_dramfs`) compiled for rv32imaf/ilp32f with small reent struct
 - **hammerblade-sim** -- verilated simulation platform: simsc binary + platform .so files + machine config (~69 MB total)
 - **hammerblade-hello** -- hello world example; reuses pre-built simsc (~27s)
-- **hammerblade-examples** -- four SPMD examples (hello, bsg_scalar_print, fib, mul_div) with binary-hash + cycle-count regression tests (~33s)
+- **hammerblade-examples** -- four SPMD examples (hello, bsg_scalar_print, fib, mul_div) with binary-hash + cycle-count regression tests (~37s)
 
 Plus Guix's standard `cross-binutils "riscv32-elf"` (binutils 2.44) used
 as-is without patches!
@@ -163,7 +171,7 @@ BSG source tree (not separate Guix packages):
 ## Verilator
 
 Verilator converts Verilog/SystemVerilog into cycle-accurate C++ models.
-We use Guix upstream's Verilator 5.046 (from `(gnu packages electronics)`).
+We use a development snapshot of Verilator 5.047 (commit ba508c0).
 Previously we pinned Verilator 4.228, but the upgrade to v5 brought ~5x
 faster simulation runtime and fixed a teardown segfault in the _final
 phase (fclose on invalid fd).
@@ -340,7 +348,7 @@ make exec.log
           - "Received finish packet from ( 16,  8)"
 ```
 
-The verilated model compilation is the bottleneck (~18 min with
+The verilated model compilation is the bottleneck (~20 min with
 Verilator 5, down from ~78 min with Verilator 4).
 
 ### Pre-built shared library cleanup
@@ -432,7 +440,7 @@ guix build -f guix.scm
 # (edit last line to riscv32-elf-newlib)
 guix build -f guix.scm
 
-# Build verilated simulation platform (~17 min, one time)
+# Build verilated simulation platform (~20 min, one time)
 # (edit last line to hammerblade-sim)
 guix build -f guix.scm
 
@@ -440,7 +448,7 @@ guix build -f guix.scm
 # (edit last line to hammerblade-hello)
 guix build -f guix.scm
 
-# Build and run all examples with regression test (~33s with cached sim)
+# Build and run all examples with regression test (~37s with cached sim)
 # (edit last line to hammerblade-examples)
 guix build -f guix.scm
 
@@ -452,8 +460,8 @@ bash guix-run.sh hello       # run hello example
 ## Package dependency graph
 
 ```
-hammerblade-sim            (~17 min, from GitHub commit 8100e97)
-  |-- verilator            (Guix upstream 5.046)
+hammerblade-sim            (~20 min, from GitHub commit 8100e97)
+  |-- verilator-dev         (5.047-dev, commit ba508c0)
   |-- bsg-manycore         (20 MB, RTL + software, recursive for HardFloat)
   |-- bsg-replicant-source (6.2 MB, simulation harness)
   |-- basejump-stl-source  (4 MB, IP library, non-recursive)
@@ -466,7 +474,7 @@ hammerblade-hello          (~27s, reuses hammerblade-sim)
   |-- bsg-replicant-source (host driver + make system)
   +-- basejump-stl-source  (DRAMSim3 configs)
 
-hammerblade-examples       (~33s, reuses hammerblade-sim)
+hammerblade-examples       (~37s, reuses hammerblade-sim)
   +-- (same deps as hammerblade-hello)
 ```
 
