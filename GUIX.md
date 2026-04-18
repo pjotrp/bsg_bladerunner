@@ -485,7 +485,41 @@ bsg_bladerunner/
         |-- libraries/
         |     +-- platforms/bigblade-verilator/  # Verilator platform
         |-- machines/
-        |     +-- pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel/
+        |     +-- bigblade_pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel/
         |           # 1x1 pod, 16x8 tiles, Ruche network, HBM DRAM
         +-- examples/spmd/hello/  # Host-side test harness
 ```
+
+## Migration notes
+
+The BSG team provided migration instructions for the latest simulation
+flow.  Here is what applies to our Guix setup and what does not:
+
+### Already handled by Guix packages
+
+- **Submodule init** -- we use separate `git-fetch` packages for
+  `bsg-manycore`, `bsg-replicant`, and `basejump-stl` instead of git
+  submodules.
+- **riscv-tools install** -- we use `bsg-riscv-toolchain` (Guix
+  cross-gcc 14.3 + newlib), not the bundled riscv-tools.
+- **`hb_mc_device_init` last param** -- our code already uses
+  `HB_MC_DEVICE_ID` (defined as `0x0`).
+- **`template.mk` BSG_MACHINE_PATH override** -- we pass
+  `BSG_MACHINE_PATH=` explicitly in make invocations.
+
+### Applied
+
+- **Machine config** -- switched from `pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel`
+  to `bigblade_pod_X1Y1_ruche_X16Y8_hbm_one_pseudo_channel` (closest
+  to the actual chip, needed for future runs on real hardware).
+
+### Not applicable (APIs not used in our code)
+
+- `bsg_barrier_hw_tile_group_init` -> `bsg_barrier_tile_group_init`
+- `bsg_barrier_hw_tile_group_sync` -> `bsg_barrier_tile_group_sync`
+- `hb_mc_device_dma_to_device` -> `hb_mc_device_transfer_data_to_device`
+- `hb_mc_device_dma_to_host` -> `hb_mc_device_transfer_data_to_host`
+
+These renames matter if you write custom `hb_hammerbench` apps that
+use DMA or hardware barriers.  Our message-passing example uses
+`bsg_fence()` for synchronization instead.
