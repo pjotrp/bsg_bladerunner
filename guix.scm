@@ -592,6 +592,25 @@ packages like hammerblade-hello use this as an input.")
 ;;;
 ;;; HammerBlade hello world example
 ;;;
+;; This package cross-compiles and runs the BSG "hello world" SPMD kernel
+;; on the verilated 128-core HammerBlade simulator.  Here is what happens:
+;;
+;; 1. Source: fetch bsg_bladerunner (minus bundled submodules).
+;; 2. Populate submodules: copy bsg_replicant, basejump_stl, and DRAMSim3
+;;    from their separate Guix packages into the expected directory layout.
+;; 3. Build setup (%hammerblade-spmd-setup):
+;;    - Copy bsg_manycore source tree (RTL + software, needs to be writable).
+;;    - Init fake git repos (BSG Makefiles call git rev-parse).
+;;    - Set environment (VERILATOR_ROOT, BSG_MANYCORE_DIR, etc.).
+;;    - Set up the RISC-V cross-toolchain (bsg-riscv-toolchain symlinks).
+;;    - Patch Makefile.builddefs for GCC 14 (-mabi=ilp32f, -fno-inline).
+;;    - Copy pre-built simsc + .so files from hammerblade-sim.
+;;    - Create stubs so make skips verilator/C++ compile/link.
+;;    - Symlink DRAMSim3 configs for libdramsim3.so.
+;;    - Set LD_LIBRARY_PATH for simsc.
+;; 4. Build: cross-compile main.c -> main.riscv, build host driver main.so,
+;;    run simulation: simsc main.so main.riscv hello 1 1
+;; 5. No install phase (build-only test).
 
 (define-public hammerblade-hello
   (package
