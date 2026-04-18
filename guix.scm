@@ -24,6 +24,31 @@
 (define %riscv32-xgcc (cross-gcc "riscv32-elf"))
 
 ;;;
+;;; Verilator development snapshot (ba508c0, 2026-04-17)
+;;;
+
+(define-public verilator-dev
+  (let ((commit "ba508c00d2c8a5a667974638ef93ec75f9d233d2")
+        (revision "0"))
+    (package
+      (inherit verilator)
+      (name "verilator-dev")
+      (version (git-version "5.047" revision commit))
+      (source
+       (origin
+         (method git-fetch)
+         (uri (git-reference
+               (url "https://github.com/verilator/verilator")
+               (commit commit)))
+         (file-name (git-file-name name version))
+         (sha256 (base32 "092jzrzxfzcm3m36dzq77lbbn7ik6ajpppk5zxmx39jggb54ccif"))))
+      ;; Skip tests for development snapshot
+      (arguments
+       (substitute-keyword-arguments (package-arguments verilator)
+         ((#:test-target _ #f) #f)
+         ((#:tests? _ #t) #f))))))
+
+;;;
 ;;; Cross-GCC for riscv32-elf with BSG Vanilla 2020 pipeline model
 ;;; Contributed by Andrew Waterman and Tommy Jung (BSG, U of Washington)
 ;;;
@@ -285,7 +310,7 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
 ;; Returns an alist of (name . path) for use by callers.
 (define %hammerblade-setup-phase
   #~(lambda* (#:key inputs #:allow-other-keys)
-      (let* ((verilator (assoc-ref inputs "verilator"))
+      (let* ((verilator (assoc-ref inputs "verilator-dev"))
              (bsg-mc (assoc-ref inputs "bsg-manycore"))
              (srcdir (getcwd))
              (replicant (string-append srcdir "/bsg_replicant"))
@@ -369,7 +394,7 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
         (setenv "RISCV" tc-dir)
         (setenv "PATH"
           (string-append tc-dir "/bin:"
-                         (assoc-ref inputs "verilator") "/bin:"
+                         (assoc-ref inputs "verilator-dev") "/bin:"
                          (getenv "PATH")))
         (mkdir-p (string-append manycore "/software/riscv-tools"))
         (symlink tc-dir
@@ -458,7 +483,7 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
                                   '("bsg_manycore" "aws-fpga" "verilator"))))))
     (build-system gnu-build-system)
     (native-inputs
-     (list verilator bsg-manycore gcc-toolchain-12
+     (list verilator-dev bsg-manycore gcc-toolchain-12
            bc git-minimal perl python-wrapper which coreutils))
     (inputs (list zlib))
     (arguments
@@ -567,7 +592,7 @@ packages like hammerblade-hello use this as an input.")
                                   '("bsg_manycore" "aws-fpga" "verilator"))))))
     (build-system gnu-build-system)
     (native-inputs
-     (list hammerblade-sim verilator bsg-manycore
+     (list hammerblade-sim verilator-dev bsg-manycore
            bsg-riscv-toolchain riscv32-elf-newlib
            gcc-toolchain-12
            bc git-minimal perl python-wrapper which coreutils))
