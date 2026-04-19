@@ -374,6 +374,18 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
         (substitute* (string-append platform-path "/hardware.mk")
           (("^VERILATOR_ROOT = ") "VERILATOR_ROOT ?= ")
           (("^VERILATOR = ") "VERILATOR ?= "))
+        ;; Patch bsg_dramsim3.cpp to check BASEJUMP_STL_DIR env var
+        ;; at runtime, falling back to the compile-time default.
+        ;; This avoids needing to grep the binary for hardcoded paths.
+        (substitute* (string-append basejump "/bsg_test/bsg_dramsim3.cpp")
+          (("#include <cstdio>")
+           "#include <cstdio>\n#include <cstdlib>")
+          (("string config_dir = stringify\\(BASEJUMP_STL_DIR\\) \"/imports/DRAMSim3/configs/\";")
+           (string-append
+            "const char *_bstl = getenv(\"BASEJUMP_STL_DIR\");\n"
+            "            string config_dir = string(_bstl ? _bstl :"
+            " stringify(BASEJUMP_STL_DIR))"
+            " + \"/imports/DRAMSim3/configs/\";")))
         ;; Add VL_THREADED define for verilator objects and
         ;; simulator object (both need it for verilated_threads.h)
         (substitute* (string-append platform-path "/link.mk")
@@ -452,11 +464,12 @@ etc.) and DRAMSim3 DRAM simulator source tree used by HammerBlade.")
            "echo 'skipping link (pre-built)'")
           (("\\$\\(CXX\\) -c \\$\\(CXXFLAGS\\) -I\\$\\(dir \\$@\\) \\$\\^ -o \\$@")
            "echo 'skipping simulator.o compile (pre-built)'"))
-        ;; DRAMSim3 config path symlink: libdramsim3.so has a
-        ;; compile-time hardcoded BASEJUMP_STL_DIR from the sim build.
-        ;; Create a symlink at that path so configs are found at runtime.
-        (let* ((sim-lib (string-append sim "/lib"))
-               (dramsim-so (string-append sim-lib "/libdramsim3.so"))
+        ;; DRAMSim3 config path: libdramsim3.so has a compile-time
+        ;; BASEJUMP_STL_DIR that checks getenv first (patched in setup),
+        ;; but also create the symlink as fallback for robustness.
+        (setenv "BASEJUMP_STL_DIR"
+                (string-append srcdir "/basejump_stl"))
+        (let* ((dramsim-so (string-append sim "/lib/libdramsim3.so"))
                (pipe (open-pipe*
                        OPEN_READ "grep" "-ao"
                        "/tmp/guix-build-hammerblade-sim[^[:space:]]*/source"
